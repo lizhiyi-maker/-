@@ -1,4 +1,4 @@
-// 业务模型随各阶段加入（M1 起）。pg-boss 的内部表（schema: pgboss）由 pg-boss 自己迁移，不纳入 Prisma。
+// pg-boss 的内部表（schema: pgboss）由 pg-boss 自己迁移，不纳入 Prisma。
 generator client {
   provider = "prisma-client"
   output   = "../src/generated/prisma"
@@ -6,4 +6,248 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+}
+
+// ───────── 账户 ─────────
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+model User {
+  id          String     @id @default(cuid())
+  /// HMAC(手机号)：用于唯一查找，不可逆
+  phoneHash   String     @unique
+  /// 应用层加密后的手机号（AES-256-GCM），仅用于展示脱敏与必要的联系
+  phoneEnc    String
+  role        UserRole   @default(USER)
+  status      UserStatus @default(ACTIVE)
+  createdAt   DateTime   @default(now())
+  lastLoginAt DateTime?
+
+  sessions     Session[]
+  invite       InviteRedemption?
+  people       Person[]
+  preference   Preference?
+  quotaEntries QuotaEntry[]
+}
+
+model Session {
+  id         String   @id @default(cuid())
+  userId     String
+  /// 令牌的 SHA-256；令牌本身只存在于用户的 httpOnly Cookie
+  tokenHash  String   @unique
+  createdAt  DateTime @default(now())
+  expiresAt  DateTime
+  lastUsedAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model LoginCode {
+  id         String    @id @default(cuid())
+  phoneHash  String
+  /// HMAC(手机号哈希 + 验证码)，不存明文验证码
+  codeHash   String
+  expiresAt  DateTime
+  attempts   Int       @default(0)
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([phoneHash, createdAt])
+}
+
+model RateLimitEvent {
+  id        BigInt   @id @default(autoincrement())
+  key       String
+  createdAt DateTime @default(now())
+
+  @@index([key, createdAt])
+}
+
+model InviteCode {
+  id          String    @id @default(cuid())
+  code        String    @unique
+  maxUses     Int
+  usedCount   Int       @default(0)
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  note        String?
+  createdById String?
+  createdAt   DateTime  @default(now())
+
+  redemptions InviteRedemption[]
+}
+
+model InviteRedemption {
+  id        String   @id @default(cuid())
+  inviteId  String
+  userId    String   @unique
+  createdAt DateTime @default(now())
+
+  invite InviteCode @relation(fields: [inviteId], references: [id])
+  user   User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ───────── 对象档案 ─────────
+
+enum Gender {
+  MALE
+  FEMALE
+}
+
+enum Stage {
+  JUST_MET
+  GETTING_TO_KNOW
+  IN_RELATIONSHIP
+  ENDED
+}
+
+enum PersonStatus {
+  ACTIVE
+  DELETING
+}
+
+enum Platform {
+  WECHAT
+  DOUYIN
+  OTHER
+}
+
+enum Feeling {
+  UNSURE
+  WANT_TO_KNOW
+  STRONG
+  PAUSE
+}
+
+model Person {
+  id               String       @id @default(cuid())
+  userId           String
+  nickname         String
+  gender           Gender?
+  channel          String?
+  metAtApprox      String?
+  /// 阶段由用户确认；未填写时为空
+  stage            Stage?
+  /// 见面经历与"是否暧昧"与阶段分开记录
+  hasMet           Boolean?
+  seesAsAmbiguous  Boolean?
+  feelingsNote     String?
+  expectationsNote String?
+  status           PersonStatus @default(ACTIVE)
+  /// 删除围栏：每次删除/失效都会递增，后台任务写回前校验
+  generation       Int          @default(0)
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  user     User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accounts PlatformAccount[]
+  feelings FeelingEntry[]
+
+  @@index([userId, status])
+}
+
+model PlatformAccount {
+  id          String   @id @default(cuid())
+  personId    String
+  userId      String
+  platform    Platform
+  handle      String
+  /// 由用户确认关联的时间；不允许凭昵称相同自动合并
+  confirmedAt DateTime @default(now())
+
+  person Person @relation(fields: [personId], references: [id], onDelete: Cascade)
+
+  @@unique([personId, platform, handle])
+  @@index([userId])
+}
+
+/// "我的好感"：独立于系统评分，保留每次修改时间
+model FeelingEntry {
+  id        String   @id @default(cuid())
+  personId  String
+  userId    String
+  value     Feeling
+  createdAt DateTime @default(now())
+
+  person Person @relation(fields: [personId], references: [id], onDelete: Cascade)
+
+  @@index([personId, createdAt])
+}
+
+// ───────── 偏好 ─────────
+
+model Preference {
+  id               String   @id @default(cuid())
+  userId           String   @unique
+  /// 每次保存递增；无记录表示使用公开默认配置（版本 0）
+  version          Int      @default(1)
+  expectation      String?
+  contactFrequency String?
+  pace             String?
+  /// { 维度key: 1..5 }
+  importance       Json
+  updatedAt        DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ───────── 额度账本 ─────────
+
+enum QuotaKind {
+  SCREENSHOT
+  ANALYSIS
+}
+
+enum QuotaEntryType {
+  GRANT
+  RESERVE
+  SETTLE
+  RELEASE
+}
+
+model QuotaEntry {
+  id        String         @id @default(cuid())
+  userId    String
+  kind      QuotaKind
+  type      QuotaEntryType
+  /// 对"可用额度"的影响：GRANT +n、RESERVE -n、RELEASE +n、SETTLE 0
+  delta     Int
+  /// 该条流水涉及的数量（SETTLE 记录实际使用量）
+  amount    Int
+  /// 任务幂等键；(user, kind, taskKey, type) 唯一，保证重试不重复扣减
+  taskKey   String?
+  periodKey String
+  reason    String?
+  actorId   String?
+  createdAt DateTime       @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, kind, taskKey, type])
+  @@index([userId, kind, periodKey])
+}
+
+// ───────── 审计 ─────────
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  action     String
+  targetType String
+  targetId   String?
+  /// 不得包含聊天正文、验证码、密钥
+  meta       Json?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
 }

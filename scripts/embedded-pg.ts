@@ -22,6 +22,8 @@ export async function startEmbeddedPg(opts: {
     password,
     port: opts.port,
     persistent: opts.persistent ?? true,
+    // 中文版 Windows 的系统区域无法用于 initdb（找不到文本搜索配置），固定使用 C 区域与 UTF8 编码
+    initdbFlags: ["--locale=C", "--encoding=UTF8"],
     onLog: () => {},
     onError: (e) => console.error("[embedded-postgres]", e),
   });

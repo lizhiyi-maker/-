@@ -1,7 +1,10 @@
 import { PgBoss } from "pg-boss";
+import { createDb, type Db } from "@/server/db";
+import { purgeExpired } from "@/server/maintenance";
 
 export const QUEUES = {
   heartbeat: "system.heartbeat",
+  purgeExpired: "maintenance.purge-expired",
 } as const;
 
 export interface HeartbeatPayload {
@@ -16,7 +19,9 @@ export function createBoss(databaseUrl: string): PgBoss {
 export async function startWorker(
   databaseUrl: string,
   onHeartbeat: (p: HeartbeatPayload) => void = () => {},
+  opts: { db?: Db } = {},
 ) {
+  const db = opts.db ?? createDb(databaseUrl);
   const boss = createBoss(databaseUrl);
   boss.on("error", (e) => console.error("[pg-boss]", e.message));
   await boss.start();
@@ -24,5 +29,17 @@ export async function startWorker(
   await boss.work<HeartbeatPayload>(QUEUES.heartbeat, async (jobs) => {
     for (const job of jobs) onHeartbeat(job.data);
   });
-  return { boss, stop: () => boss.stop({ graceful: true, timeout: 10_000 }) };
+  // 每小时清理一次过期的验证码、限流记录与会话
+  await boss.createQueue(QUEUES.purgeExpired);
+  await boss.schedule(QUEUES.purgeExpired, "17 * * * *");
+  await boss.work(QUEUES.purgeExpired, async () => {
+    await purgeExpired(db);
+  });
+  return {
+    boss,
+    stop: async () => {
+      await boss.stop({ graceful: true, timeout: 10_000 });
+      if (!opts.db) await db.$disconnect();
+    },
+  };
 }

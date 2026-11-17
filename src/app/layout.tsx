@@ -1,5 +1,4 @@
 import type { Metadata, Viewport } from "next";
-import { AppShell } from "@/components/app-shell";
 import { DemoBanner } from "@/components/demo-banner";
 import { isDemoMode } from "@/lib/env";
 import "./globals.css";
@@ -19,7 +18,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="zh-CN">
       <body>
         {isDemoMode() && <DemoBanner />}
-        <AppShell>{children}</AppShell>
+        {children}
       </body>
     </html>
   );

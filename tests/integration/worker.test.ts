@@ -1,14 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startTestDb } from "../support/test-db";
+import { newTestDb } from "../support/db";
 import { createBoss, QUEUES, startWorker, type HeartbeatPayload } from "@/worker/boss";
-import type { EmbeddedDb } from "../../scripts/embedded-pg";
 
-let db: EmbeddedDb;
+let db: Awaited<ReturnType<typeof newTestDb>>;
 beforeAll(async () => {
-  db = await startTestDb();
+  db = await newTestDb();
 });
 afterAll(async () => {
-  await db?.stop();
+  await db?.close();
 });
 
 describe("pg-boss 独立 worker 链路", () => {

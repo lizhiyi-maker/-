@@ -1,9 +1,15 @@
 import { expect, test } from "@playwright/test";
+import { devLogin } from "./helpers";
 
-test("显示演示标识，并按视口展示对应导航", async ({ page, isMobile }) => {
+test("未登录访问首页会跳转到登录页，登录页显示演示标识", async ({ page }) => {
   await page.goto("/");
+  await expect(page).toHaveURL(/\/login$/);
   await expect(page.getByTestId("demo-banner")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "对象" })).toBeVisible();
+});
+
+test("登录后按视口展示对应导航，并可切换页面", async ({ page, isMobile }) => {
+  await devLogin(page);
+  await expect(page.getByTestId("demo-banner")).toBeVisible();
 
   const nav = page.getByRole("navigation", { name: isMobile ? "底部导航" : "主导航" });
   await expect(nav).toBeVisible();
@@ -15,9 +21,11 @@ test("显示演示标识，并按视口展示对应导航", async ({ page, isMob
   await expect(page.getByRole("heading", { name: "对比" })).toBeVisible();
 });
 
-test("手机端不出现横向滚动", async ({ page, isMobile }) => {
+test("手机端不出现横向滚动（登录页与对象页）", async ({ page, isMobile }) => {
   test.skip(!isMobile, "仅手机视口");
-  await page.goto("/");
-  const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
-  expect(overflow).toBe(false);
+  const overflow = () => page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
+  await page.goto("/login");
+  expect(await overflow()).toBe(false);
+  await devLogin(page);
+  expect(await overflow()).toBe(false);
 });

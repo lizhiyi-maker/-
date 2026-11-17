@@ -1,0 +1,6 @@
+{
+  "periodDays": 30,
+  "screenshot": { "perPeriod": 120, "perBatch": 30 },
+  "analysis": { "perPeriod": 8 },
+  "textPerBatchChars": 20000
+}

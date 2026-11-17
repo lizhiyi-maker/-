@@ -16,6 +16,8 @@ const baseSchema = z.object({
   STORAGE_PROVIDER: z.enum(["local", "oss"]).default("local"),
   SMS_PROVIDER: z.enum(["mock", "aliyun"]).default("mock"),
   DEV_LOGIN_ENABLED: flag,
+  // 可信反向代理层数；0 表示不信任 X-Forwarded-For（IP 限流退化为单一共享桶）
+  TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
   AUTH_SECRET: secret,
   PHONE_HMAC_KEY: secret,
   PHONE_ENC_KEY: secret,
@@ -89,4 +91,9 @@ export function getEnv(): Env {
 /** 演示状态：仅依据 APP_MODE，供界面标识使用（完整校验在启动时执行）。 */
 export function isDemoMode(source: Record<string, string | undefined> = process.env): boolean {
   return source.APP_MODE === "demo" && source.NODE_ENV !== "production";
+}
+
+/** 开发登录是否可用：仅演示模式、非生产环境且显式开启。生产环境恒为 false。 */
+export function devLoginAllowed(env: Pick<Env, "APP_MODE" | "NODE_ENV" | "DEV_LOGIN_ENABLED">): boolean {
+  return env.APP_MODE === "demo" && env.NODE_ENV !== "production" && env.DEV_LOGIN_ENABLED;
 }

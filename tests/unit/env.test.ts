@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EnvError, isDemoMode, parseEnv } from "@/lib/env";
+import { devLoginAllowed, EnvError, isDemoMode, parseEnv } from "@/lib/env";
 
 const strong = "a".repeat(40);
 const demoEnv = {
@@ -78,5 +78,12 @@ describe("环境校验与演示开关守卫", () => {
       expect((e as Error).message).not.toContain("super-secret-value-short");
       expect((e as Error).message).toContain("DASHSCOPE_API_KEY");
     }
+  });
+
+  it("开发登录只在演示模式、非生产且显式开启时可用", () => {
+    expect(devLoginAllowed(parseEnv(demoEnv))).toBe(true);
+    expect(devLoginAllowed(parseEnv({ ...demoEnv, DEV_LOGIN_ENABLED: "false" }))).toBe(false);
+    expect(devLoginAllowed(parseEnv(prodEnv))).toBe(false);
+    expect(devLoginAllowed({ APP_MODE: "demo", NODE_ENV: "production", DEV_LOGIN_ENABLED: true })).toBe(false);
   });
 });
