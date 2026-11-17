@@ -1,0 +1,92 @@
+import { z } from "zod";
+
+const flag = z
+  .enum(["true", "false"])
+  .default("false")
+  .transform((v) => v === "true");
+
+const secret = z.string().min(1);
+
+const baseSchema = z.object({
+  NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  // 默认 production：未显式声明 demo 时，不会静默启用任何模拟或绕过能力。
+  APP_MODE: z.enum(["demo", "production"]).default("production"),
+  DATABASE_URL: z.string().min(1),
+  AI_PROVIDER: z.enum(["mock", "bailian"]).default("mock"),
+  STORAGE_PROVIDER: z.enum(["local", "oss"]).default("local"),
+  SMS_PROVIDER: z.enum(["mock", "aliyun"]).default("mock"),
+  DEV_LOGIN_ENABLED: flag,
+  AUTH_SECRET: secret,
+  PHONE_HMAC_KEY: secret,
+  PHONE_ENC_KEY: secret,
+  DASHSCOPE_API_KEY: z.string().optional(),
+  ALIYUN_ACCESS_KEY_ID: z.string().optional(),
+  ALIYUN_ACCESS_KEY_SECRET: z.string().optional(),
+  OSS_BUCKET: z.string().optional(),
+  OSS_REGION: z.string().optional(),
+  SMS_SIGN_NAME: z.string().optional(),
+  SMS_TEMPLATE_CODE: z.string().optional(),
+});
+
+const PLACEHOLDER = /dev-only|change-me|example|placeholder/i;
+
+export const envSchema = baseSchema.superRefine((env, ctx) => {
+  const fail = (path: string, message: string) =>
+    ctx.addIssue({ code: "custom", path: [path], message });
+
+  if (env.NODE_ENV === "production" && env.APP_MODE === "demo") {
+    fail("APP_MODE", "生产环境（NODE_ENV=production）不允许 APP_MODE=demo");
+  }
+
+  if (env.APP_MODE === "production") {
+    if (env.AI_PROVIDER === "mock") fail("AI_PROVIDER", "生产模式不得使用模拟模型");
+    if (env.STORAGE_PROVIDER === "local") fail("STORAGE_PROVIDER", "生产模式不得使用本地模拟存储");
+    if (env.SMS_PROVIDER === "mock") fail("SMS_PROVIDER", "生产模式不得使用模拟短信");
+    if (env.DEV_LOGIN_ENABLED) fail("DEV_LOGIN_ENABLED", "生产模式不得启用开发登录");
+    for (const key of ["AUTH_SECRET", "PHONE_HMAC_KEY", "PHONE_ENC_KEY"] as const) {
+      if (env[key].length < 32 || PLACEHOLDER.test(env[key])) {
+        fail(key, "生产模式密钥必须至少 32 字符且不得为示例值");
+      }
+    }
+  }
+
+  if (env.DEV_LOGIN_ENABLED && env.APP_MODE !== "demo") {
+    fail("DEV_LOGIN_ENABLED", "开发登录仅允许在 APP_MODE=demo 下启用");
+  }
+
+  const need = (cond: boolean, keys: (keyof typeof env)[], why: string) => {
+    if (!cond) return;
+    for (const k of keys) if (!env[k]) fail(k, `${why} 需要设置 ${k}`);
+  };
+  need(env.AI_PROVIDER === "bailian", ["DASHSCOPE_API_KEY"], "AI_PROVIDER=bailian");
+  need(env.STORAGE_PROVIDER === "oss", ["ALIYUN_ACCESS_KEY_ID", "ALIYUN_ACCESS_KEY_SECRET", "OSS_BUCKET", "OSS_REGION"], "STORAGE_PROVIDER=oss");
+  need(env.SMS_PROVIDER === "aliyun", ["ALIYUN_ACCESS_KEY_ID", "ALIYUN_ACCESS_KEY_SECRET", "SMS_SIGN_NAME", "SMS_TEMPLATE_CODE"], "SMS_PROVIDER=aliyun");
+});
+
+export type Env = z.infer<typeof envSchema>;
+
+export class EnvError extends Error {
+  constructor(public readonly issues: string[]) {
+    super(`环境配置无效：\n${issues.map((i) => `  - ${i}`).join("\n")}`);
+    this.name = "EnvError";
+  }
+}
+
+/** 纯函数：解析并校验环境变量；不合法则抛出 EnvError（消息不含取值，避免泄露密钥）。 */
+export function parseEnv(source: Record<string, string | undefined>): Env {
+  const result = envSchema.safeParse(source);
+  if (!result.success) {
+    throw new EnvError(result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`));
+  }
+  return result.data;
+}
+
+let cached: Env | undefined;
+export function getEnv(): Env {
+  return (cached ??= parseEnv(process.env));
+}
+
+/** 演示状态：仅依据 APP_MODE，供界面标识使用（完整校验在启动时执行）。 */
+export function isDemoMode(source: Record<string, string | undefined> = process.env): boolean {
+  return source.APP_MODE === "demo" && source.NODE_ENV !== "production";
+}

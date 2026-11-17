@@ -1,0 +1,9 @@
+// 业务模型随各阶段加入（M1 起）。pg-boss 的内部表（schema: pgboss）由 pg-boss 自己迁移，不纳入 Prisma。
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
