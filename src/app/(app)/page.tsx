@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Plus } from "lucide-react";
 import { Badge, Card, EmptyState } from "@/components/ui/card";
+import { BATCH_STATUS_LABEL } from "@/domain/imports";
 import { FEELING_LABEL, STAGE_LABEL, type GenderFilter } from "@/domain/people";
 import { cn } from "@/lib/utils";
 import { getServices } from "@/server/container";
@@ -16,7 +17,8 @@ export default async function HomePage({ searchParams }: { searchParams: Promise
   const user = await requireUser();
   const { gender } = await searchParams;
   const filter: GenderFilter = gender === "MALE" || gender === "FEMALE" ? gender : "ALL";
-  const people = await getServices().people.list(user.id, filter);
+  const { people: peopleService, imports } = getServices();
+  const [people, pending] = await Promise.all([peopleService.list(user.id, filter), imports.listPending(user.id)]);
 
   return (
     <section className="space-y-5">
@@ -33,9 +35,27 @@ export default async function HomePage({ searchParams }: { searchParams: Promise
 
       <Card>
         <h2 className="mb-1 text-sm font-semibold">待办</h2>
-        <p className="text-sm text-muted-foreground" data-testid="todo-empty">
-          暂无待确认或待分析事项。导入聊天资料后，待确认的识别结果和有新资料待分析的对象会显示在这里。
-        </p>
+        {pending.length === 0 ? (
+          <p className="text-sm text-muted-foreground" data-testid="todo-empty">
+            暂无待确认或待分析事项。导入聊天资料后，待确认的内容和有新资料待分析的对象会显示在这里。
+          </p>
+        ) : (
+          <ul className="divide-y text-sm" data-testid="todo-pending">
+            {pending.map((b) => (
+              <li key={b.id} className="flex items-center justify-between gap-2 py-2">
+                <span>
+                  <span className="font-medium">{b.nickname}</span>
+                  <span className="ml-2 text-muted-foreground">
+                    {BATCH_STATUS_LABEL[b.status]} · {b.messageCount} 条
+                  </span>
+                </span>
+                <Link href={`/people/${b.personId}/import/${b.id}`} className="shrink-0 text-primary">
+                  去确认
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
       </Card>
 
       <nav aria-label="性别筛选" className="flex gap-2">

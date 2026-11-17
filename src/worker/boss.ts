@@ -1,6 +1,6 @@
 import { PgBoss } from "pg-boss";
 import { createDb, type Db } from "@/server/db";
-import { purgeExpired } from "@/server/maintenance";
+import { purgeExpired, purgeStaleBatches } from "@/server/maintenance";
 
 export const QUEUES = {
   heartbeat: "system.heartbeat",
@@ -29,11 +29,12 @@ export async function startWorker(
   await boss.work<HeartbeatPayload>(QUEUES.heartbeat, async (jobs) => {
     for (const job of jobs) onHeartbeat(job.data);
   });
-  // 每小时清理一次过期的验证码、限流记录与会话
+  // 每小时清理一次过期的验证码、限流记录、会话，以及超过 7 天未保存的导入批次
   await boss.createQueue(QUEUES.purgeExpired);
   await boss.schedule(QUEUES.purgeExpired, "17 * * * *");
   await boss.work(QUEUES.purgeExpired, async () => {
     await purgeExpired(db);
+    await purgeStaleBatches(db);
   });
   return {
     boss,

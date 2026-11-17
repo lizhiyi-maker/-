@@ -11,10 +11,12 @@ export default defineConfig({
   reporter: [["list"]],
   use: { baseURL: `http://127.0.0.1:${PORT}`, locale: "zh-CN" },
   projects: [
+    // 预热：先串行编译所有路由，避免并行冷启动导致偶发超时
+    { name: "warmup", testMatch: /warmup\.setup\.ts/, use: { ...devices["Desktop Chrome"], extraHTTPHeaders: { "x-forwarded-for": "198.51.100.9" } } },
     // 每个项目用不同的 X-Forwarded-For，避免并行项目共用同一个 IP 限流桶
-    { name: "iphone-safari", use: { ...devices["iPhone 14"], extraHTTPHeaders: { "x-forwarded-for": "198.51.100.1" } } },
-    { name: "android-chrome", use: { ...devices["Pixel 7"], extraHTTPHeaders: { "x-forwarded-for": "198.51.100.2" } } },
-    { name: "desktop-chrome", use: { ...devices["Desktop Chrome"], extraHTTPHeaders: { "x-forwarded-for": "198.51.100.3" } } },
+    { name: "iphone-safari", dependencies: ["warmup"], use: { ...devices["iPhone 14"], extraHTTPHeaders: { "x-forwarded-for": "198.51.100.1" } } },
+    { name: "android-chrome", dependencies: ["warmup"], use: { ...devices["Pixel 7"], extraHTTPHeaders: { "x-forwarded-for": "198.51.100.2" } } },
+    { name: "desktop-chrome", dependencies: ["warmup"], use: { ...devices["Desktop Chrome"], extraHTTPHeaders: { "x-forwarded-for": "198.51.100.3" } } },
   ],
   webServer: {
     command: `npx next dev --port ${PORT}`,

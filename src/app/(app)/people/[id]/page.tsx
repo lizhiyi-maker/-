@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { deleteBatchAction, setDataKindAction } from "@/app/actions/imports";
 import {
   addAccountAction,
   deletePersonAction,
@@ -8,8 +9,11 @@ import {
 } from "@/app/actions/people";
 import { AddAccountForm } from "@/components/account-form";
 import { ConfirmButton } from "@/components/confirm-button";
+import { MessageList } from "@/components/message-list";
 import { Button } from "@/components/ui/button";
 import { Badge, Card, CardTitle, EmptyState } from "@/components/ui/card";
+import { Select } from "@/components/ui/form-controls";
+import { BATCH_STATUS_LABEL, DATA_KIND_HINT, DATA_KIND_LABEL } from "@/domain/imports";
 import { FEELING_LABEL, GENDER_LABEL, PLATFORM_LABEL, STAGE_LABEL } from "@/domain/people";
 import { formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -31,16 +35,27 @@ export default async function PersonPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ tab?: string }>;
+  searchParams: Promise<{ tab?: string; batch?: string; saved?: string; merged?: string }>;
 }) {
   const { id } = await params;
-  const { tab: rawTab } = await searchParams;
+  const { tab: rawTab, batch: batchParam, saved, merged } = await searchParams;
   const tab = TABS.find((t) => t.key === rawTab)?.key ?? "overview";
   const user = await requireUser();
   const person = await getServices()
     .people.get(user.id, id)
     .catch((e) => (e instanceof NotFoundError ? null : Promise.reject(e)));
   if (!person) notFound();
+
+  const { imports } = getServices();
+  const chats =
+    tab === "chats"
+      ? {
+          batches: await imports.listBatches(user.id, id),
+          pending: (await imports.listPending(user.id)).filter((b) => b.personId === id),
+        }
+      : null;
+  const openBatch = chats?.batches.find((b) => b.id === batchParam) ?? null;
+  const openMessages = openBatch ? await imports.listMessages(user.id, openBatch.id) : [];
 
   return (
     <section className="space-y-4">
@@ -163,7 +178,101 @@ export default async function PersonPage({
         </div>
       )}
 
-      {tab === "chats" && <EmptyState title="还没有聊天资料">聊天截图与文本导入将在下一阶段开放。</EmptyState>}
+      {tab === "chats" && chats && (
+        <div className="space-y-4">
+          {saved !== undefined && (
+            <Card className="border-green-300 bg-green-50" data-testid="saved-notice">
+              <p className="text-sm font-medium text-green-800">
+                已保存 {saved} 条消息{Number(merged) > 0 ? `，合并了 ${merged} 条重复消息` : ""}。
+              </p>
+              <p className="mt-1 text-xs text-green-800/80">新增资料不会自动分析。准备好之后，由你决定何时开始分析。</p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Link href={`/people/${id}/import/new`} className="inline-flex h-10 items-center rounded-md border bg-card px-4 text-sm font-medium">
+                  继续添加资料
+                </Link>
+                <Button type="button" disabled title="分析功能将在下一阶段开放">
+                  开始分析（下一阶段开放）
+                </Button>
+              </div>
+            </Card>
+          )}
+
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold">聊天资料</h2>
+            <Link href={`/people/${id}/import/new`} className="inline-flex h-9 items-center rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground">
+              导入聊天资料
+            </Link>
+          </div>
+
+          {chats.pending.length > 0 && (
+            <Card className="border-warn" data-testid="pending-batches">
+              <CardTitle>待确认</CardTitle>
+              <ul className="divide-y text-sm">
+                {chats.pending.map((b) => (
+                  <li key={b.id} className="flex items-center justify-between py-2">
+                    <span>
+                      {BATCH_STATUS_LABEL[b.status]} · {b.messageCount} 条 · {formatDateTime(b.createdAt)}
+                    </span>
+                    <Link href={`/people/${id}/import/${b.id}`} className="text-primary">
+                      继续确认
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          )}
+
+          {chats.batches.length === 0 && chats.pending.length === 0 ? (
+            <EmptyState title="还没有聊天资料">点击“导入聊天资料”，粘贴你们的聊天文本。保存之前，你可以先核对和修改。</EmptyState>
+          ) : (
+            <ul className="space-y-3" data-testid="batch-list">
+              {chats.batches.map((b) => (
+                <li key={b.id}>
+                  <Card>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center gap-1.5 text-sm">
+                        <Badge>{PLATFORM_LABEL[b.platform]}</Badge>
+                        <Badge tone="primary">{DATA_KIND_LABEL[b.dataKind]}</Badge>
+                        <span>{b.messageCount} 条</span>
+                        <span className="text-xs text-muted-foreground">{b.confirmedAt ? formatDateTime(b.confirmedAt) : ""}</span>
+                      </div>
+                      <Link
+                        href={b.id === batchParam ? `/people/${id}?tab=chats` : `/people/${id}?tab=chats&batch=${b.id}`}
+                        className="text-sm text-primary"
+                      >
+                        {b.id === batchParam ? "收起" : "查看"}
+                      </Link>
+                    </div>
+                    {b.dataKind !== "CONTINUOUS" && <p className="mt-2 text-xs text-muted-foreground">{DATA_KIND_HINT[b.dataKind]}</p>}
+                    {b.id === batchParam && (
+                      <div className="mt-4 space-y-4 border-t pt-4">
+                        <MessageList messages={openMessages} />
+                        <form action={setDataKindAction.bind(null, id, b.id)} className="flex gap-2">
+                          <Select name="dataKind" aria-label="资料类型" defaultValue={b.dataKind}>
+                            {Object.entries(DATA_KIND_LABEL).map(([v, l]) => (
+                              <option key={v} value={v}>
+                                {l}
+                              </option>
+                            ))}
+                          </Select>
+                          <Button type="submit" variant="outline">
+                            更新资料类型
+                          </Button>
+                        </form>
+                        <form action={deleteBatchAction.bind(null, id, b.id, "person")}>
+                          <ConfirmButton variant="outline" className="border-red-300 text-red-700" message="确定删除这批资料吗？其中的消息与修订都会被删除，此操作无法撤销。">
+                            删除这批资料
+                          </ConfirmButton>
+                        </form>
+                      </div>
+                    )}
+                  </Card>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
       {tab === "analysis" && <EmptyState title="暂无分析">导入聊天资料并点击“开始分析”后，报告与建议会显示在这里。</EmptyState>}
       {tab === "records" && <EmptyState title="暂无关系记录">线下事件、好感变化与分析快照的时间线将在后续阶段开放。</EmptyState>}
     </section>

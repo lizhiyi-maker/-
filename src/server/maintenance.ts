@@ -14,3 +14,11 @@ export async function purgeExpired(db: Db, now: Date = new Date()) {
   ]);
   return { loginCodes: loginCodes.count, rateLimitEvents: rateLimitEvents.count, sessions: sessions.count };
 }
+
+/** 超过 7 天仍未保存的导入批次连同暂存消息一并清理（docs/business/privacy-retention.md §2）。 */
+export async function purgeStaleBatches(db: Db, now: Date = new Date()) {
+  const r = await db.importBatch.deleteMany({
+    where: { status: { not: "CONFIRMED" }, createdAt: { lt: new Date(now.getTime() - 7 * DAY) } },
+  });
+  return { batches: r.count };
+}

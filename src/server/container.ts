@@ -2,6 +2,7 @@ import { getEnv } from "@/lib/env";
 import { getDb } from "@/server/db";
 import { createAdmin } from "@/server/admin/service";
 import { createAuth } from "@/server/auth/service";
+import { createImports } from "@/server/imports/service";
 import { createPeople } from "@/server/people/service";
 import { createPreferences } from "@/server/preferences/service";
 import { createQuota } from "@/server/quota/ledger";
@@ -24,6 +25,7 @@ function build() {
     keys,
     auth: createAuth(db, { sms: buildSms(env.SMS_PROVIDER), keys }),
     people: createPeople(db),
+    imports: createImports(db),
     preferences: createPreferences(db),
     quota: createQuota(db),
     admin: createAdmin(db, { keys }),

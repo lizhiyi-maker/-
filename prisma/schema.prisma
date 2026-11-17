@@ -31,11 +31,13 @@ model User {
   createdAt   DateTime   @default(now())
   lastLoginAt DateTime?
 
-  sessions     Session[]
-  invite       InviteRedemption?
-  people       Person[]
-  preference   Preference?
-  quotaEntries QuotaEntry[]
+  sessions      Session[]
+  invite        InviteRedemption?
+  people        Person[]
+  preference    Preference?
+  quotaEntries  QuotaEntry[]
+  importBatches ImportBatch[]
+  messages      Message[]
 }
 
 model Session {
@@ -152,6 +154,8 @@ model Person {
   user     User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   accounts PlatformAccount[]
   feelings FeelingEntry[]
+  batches  ImportBatch[]
+  messages Message[]
 
   @@index([userId, status])
 }
@@ -182,6 +186,134 @@ model FeelingEntry {
   person Person @relation(fields: [personId], references: [id], onDelete: Cascade)
 
   @@index([personId, createdAt])
+}
+
+// ───────── 聊天资料导入 ─────────
+
+enum SourceKind {
+  TEXT
+  SCREENSHOT
+}
+
+/// 用户对一批资料的标记：精选片段与不确定资料不能直接推断整段关系的主动频率与稳定性
+enum DataKind {
+  CONTINUOUS
+  CURATED
+  UNCERTAIN
+}
+
+enum BatchStatus {
+  UPLOADING
+  RECOGNIZING
+  PENDING_CONFIRM
+  CONFIRMED
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  VOICE
+  SYSTEM
+  OTHER
+}
+
+/// 未知时间与真实时间分开：只有 SECOND/MINUTE 才是可靠时间
+enum TimePrecision {
+  SECOND
+  MINUTE
+  DATE
+  ORDER_ONLY
+  UNKNOWN
+}
+
+enum Speaker {
+  SELF
+  OTHER
+  UNKNOWN
+}
+
+enum RecognitionStatus {
+  RECOGNIZED
+  UNCERTAIN
+  USER_EDITED
+}
+
+enum MessageState {
+  STAGED
+  CONFIRMED
+}
+
+model ImportBatch {
+  id                  String      @id @default(cuid())
+  userId              String
+  personId            String
+  platform            Platform
+  sourceKind          SourceKind
+  dataKind            DataKind
+  status              BatchStatus @default(UPLOADING)
+  parserId            String?
+  /// 文本中的发言人名称 → SELF/OTHER，由用户确认
+  labelRoles          Json        @default("{}")
+  /// 用户明确确认"我/对方"的时间；未确认前不能保存，不能凭气泡颜色或默认值决定
+  identityConfirmedAt DateTime?
+  /// 删除围栏：删除时递增，后台任务写回前校验
+  generation          Int         @default(0)
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+  confirmedAt         DateTime?
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  person   Person    @relation(fields: [personId], references: [id], onDelete: Cascade)
+  messages Message[]
+
+  @@index([personId, status])
+  @@index([userId, status])
+}
+
+model Message {
+  id              String            @id @default(cuid())
+  userId          String
+  personId        String
+  batchId         String
+  /// 批次内的顺序
+  seq             Int
+  speaker         Speaker           @default(UNKNOWN)
+  speakerLabel    String?
+  type            MessageType       @default(TEXT)
+  occurredAt      DateTime?
+  timePrecision   TimePrecision     @default(UNKNOWN)
+  /// 原始出处：{ kind: "text", line } 或（截图）{ kind: "image", index, ... }
+  origin          Json
+  recognition     RecognitionStatus @default(RECOGNIZED)
+  uncertainReason String?
+  state           MessageState      @default(STAGED)
+  /// 与已保存消息重叠（仅暂存期间有意义，确认时默认合并）
+  duplicateOfId   String?
+  currentRevision Int               @default(1)
+  createdAt       DateTime          @default(now())
+
+  user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  person      Person            @relation(fields: [personId], references: [id], onDelete: Cascade)
+  batch       ImportBatch       @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  duplicateOf Message?          @relation("Overlap", fields: [duplicateOfId], references: [id], onDelete: SetNull)
+  duplicates  Message[]         @relation("Overlap")
+  revisions   MessageRevision[]
+
+  @@unique([batchId, seq])
+  @@index([personId, state])
+}
+
+/// 内容只存在于修订中；编辑产生新修订，证据引用 消息+修订（见 ADR-0002）
+model MessageRevision {
+  id        String   @id @default(cuid())
+  messageId String
+  revision  Int
+  content   String
+  createdAt DateTime @default(now())
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, revision])
 }
 
 // ───────── 偏好 ─────────

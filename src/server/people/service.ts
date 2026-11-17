@@ -15,12 +15,28 @@ import type { Feeling } from "@/generated/prisma/enums";
 
 export { NotFoundError, ValidationError };
 
-type Tx = Parameters<Parameters<Db["$transaction"]>[0]>[0];
+export type Tx = Parameters<Parameters<Db["$transaction"]>[0]>[0];
 
 function parse<T extends z.ZodType>(schema: T, input: unknown): z.output<T> {
   const r = schema.safeParse(input);
   if (!r.success) throw new ValidationError(r.error.issues[0]?.message ?? "输入无效");
   return r.data;
+}
+
+/**
+ * 在事务内对对象行加共享锁，并校验归属、未被删除（以及可选的代际未变）。
+ * 与对象删除（FOR UPDATE）互斥，供需要"写回前确认对象仍然存在"的服务使用。
+ */
+export async function lockLivePerson(tx: Tx, userId: string, personId: string, generation?: number) {
+  const rows =
+    generation === undefined
+      ? await tx.$queryRaw<{ id: string }[]>`
+          SELECT "id" FROM "Person" WHERE "id" = ${personId} AND "userId" = ${userId} AND "status" = 'ACTIVE' FOR SHARE`
+      : await tx.$queryRaw<{ id: string }[]>`
+          SELECT "id" FROM "Person"
+          WHERE "id" = ${personId} AND "userId" = ${userId} AND "status" = 'ACTIVE' AND "generation" = ${generation}
+          FOR SHARE`;
+  if (rows.length === 0) throw new NotFoundError("对象");
 }
 
 /**
@@ -115,11 +131,7 @@ export function createPeople(db: Db) {
   ): Promise<T> {
     return db.$transaction(
       async (tx) => {
-        const rows = await tx.$queryRaw<{ id: string }[]>`
-          SELECT "id" FROM "Person"
-          WHERE "id" = ${personId} AND "userId" = ${userId} AND "status" = 'ACTIVE' AND "generation" = ${generation}
-          FOR SHARE`;
-        if (rows.length === 0) throw new NotFoundError("对象");
+        await lockLivePerson(tx, userId, personId, generation);
         return fn(tx);
       },
       { timeout: opts.timeoutMs ?? 30_000 },
