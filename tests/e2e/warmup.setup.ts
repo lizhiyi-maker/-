@@ -5,6 +5,9 @@ import { devLogin, uniqueName, waitForHydration } from "./helpers";
  * 预热：开发服务器首次访问每个路由时才编译，三个项目并行冷启动会互相拖慢、偶发超时。
  * 先串行访问一遍所有页面，之后的用例都在已编译的路由上运行。本身也是一次完整的冒烟检查。
  */
+// 偶发：被强制结束的开发服务器可能留下不一致的编译缓存，首次访问会反复重载。重试一次即可恢复。
+test.describe.configure({ retries: 1 });
+
 test("预热并冒烟：依次访问各页面", async ({ page }) => {
   test.setTimeout(240_000);
   await page.goto("/login");

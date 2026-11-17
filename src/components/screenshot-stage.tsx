@@ -1,9 +1,11 @@
 import { retryFailedAction, removeScreenshotAction, skipFailedAction, startRecognitionAction } from "@/app/actions/imports";
 import { ActionButton } from "@/components/action-button";
+import { ConsentCard } from "@/components/consent-card";
 import { AutoRefresh } from "@/components/auto-refresh";
 import { ScreenshotUploader } from "@/components/screenshot-uploader";
 import { Button } from "@/components/ui/button";
 import { Badge, Card, CardTitle } from "@/components/ui/card";
+import type { ProviderInfo } from "@/domain/consent";
 
 export interface ShotView {
   id: string;
@@ -58,6 +60,8 @@ export function ScreenshotStage({
   progress,
   quotaAvailable,
   perBatch,
+  consented,
+  provider,
 }: {
   personId: string;
   batchId: string;
@@ -65,6 +69,8 @@ export function ScreenshotStage({
   progress: ProgressView;
   quotaAvailable: number;
   perBatch: number;
+  consented: boolean;
+  provider: ProviderInfo;
 }) {
   const uploading = progress.status === "UPLOADING";
   const running = progress.queued + progress.running;
@@ -146,7 +152,9 @@ export function ScreenshotStage({
         )}
       </Card>
 
-      {uploading && (
+      {uploading && !consented && <ConsentCard provider={provider} action="截图识别" />}
+
+      {uploading && consented && (
         <Card>
           <CardTitle>2. 开始识别</CardTitle>
           <p className="mb-3 text-sm text-muted-foreground" data-testid="quota-hint">

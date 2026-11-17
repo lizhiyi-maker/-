@@ -63,7 +63,8 @@ export default async function ImportConfirmPage({
     );
   }
   if (progress && (batch.status === "UPLOADING" || batch.status === "RECOGNIZING")) {
-    const quotaAvailable = await getServices().quota.getAvailable(user.id, "SCREENSHOT");
+    const { quota, consent, provider } = getServices();
+    const [quotaAvailable, consentStatus] = await Promise.all([quota.getAvailable(user.id, "SCREENSHOT"), consent.status(user.id)]);
     return (
       <section className="mx-auto max-w-2xl space-y-4">
         <Link href={`/people/${id}?tab=chats`} className="text-sm text-muted-foreground">
@@ -74,7 +75,7 @@ export default async function ImportConfirmPage({
           <Badge>{PLATFORM_LABEL[batch.platform]}</Badge>
           <Badge tone="primary">{DATA_KIND_LABEL[batch.dataKind]}</Badge>
         </div>
-        <ScreenshotStage personId={id} batchId={batchId} shots={shots} progress={progress} quotaAvailable={quotaAvailable} perBatch={quotaConfig.screenshot.perBatch} />
+        <ScreenshotStage personId={id} batchId={batchId} shots={shots} progress={progress} quotaAvailable={quotaAvailable} perBatch={quotaConfig.screenshot.perBatch} consented={consentStatus.accepted} provider={provider} />
         <form action={deleteBatchAction.bind(null, id, batchId, "person")}>
           <ConfirmButton variant="ghost" className="w-full text-red-700" message="放弃这批资料吗？已上传的截图会被删除，已预留的识别额度会退还。">
             放弃这批资料

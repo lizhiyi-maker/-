@@ -8,6 +8,7 @@ import {
   setFeelingAction,
 } from "@/app/actions/people";
 import { AddAccountForm } from "@/components/account-form";
+import { AnalysisPanel } from "@/components/analysis-panel";
 import { ConfirmButton } from "@/components/confirm-button";
 import { MessageList } from "@/components/message-list";
 import { Button } from "@/components/ui/button";
@@ -190,9 +191,9 @@ export default async function PersonPage({
                 <Link href={`/people/${id}/import/new`} className="inline-flex h-10 items-center rounded-md border bg-card px-4 text-sm font-medium">
                   继续添加资料
                 </Link>
-                <Button type="button" disabled title="分析功能将在下一阶段开放">
-                  开始分析（下一阶段开放）
-                </Button>
+                <Link href={`/people/${id}?tab=analysis`} className="inline-flex h-10 items-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground">
+                  开始分析
+                </Link>
               </div>
             </Card>
           )}
@@ -273,7 +274,7 @@ export default async function PersonPage({
           )}
         </div>
       )}
-      {tab === "analysis" && <EmptyState title="暂无分析">导入聊天资料并点击“开始分析”后，报告与建议会显示在这里。</EmptyState>}
+      {tab === "analysis" && <AnalysisPanel userId={user.id} personId={id} />}
       {tab === "records" && <EmptyState title="暂无关系记录">线下事件、好感变化与分析快照的时间线将在后续阶段开放。</EmptyState>}
     </section>
   );

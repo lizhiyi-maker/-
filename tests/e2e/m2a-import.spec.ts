@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { createInviteAsAdmin, devLogin, randomPhone, smsLogin, uniqueName, waitForHydration } from "./helpers";
+import { createInviteAsAdmin, devLogin, fillPastedText, randomPhone, smsLogin, uniqueName, waitForHydration } from "./helpers";
 
 const CHAT = ["阿青：今晚吃什么", "我：火锅怎么样", "???", "阿青：好呀", "我：七点见", "阿青：不见不散"].join("\n");
 
@@ -15,7 +15,7 @@ async function pasteAndSubmit(page: Page, personId: string, text: string, kindLa
   await page.goto(`/people/${personId}/import/new`);
   await waitForHydration(page);
   if (kindLabel) await page.getByRole("radio", { name: new RegExp(`^${kindLabel}`) }).check();
-  await page.getByLabel("粘贴聊天文本").fill(text);
+  await fillPastedText(page, text);
   await page.getByRole("button", { name: "整理并进入确认" }).click();
   await expect(page.getByRole("heading", { name: "确认导入的聊天" })).toBeVisible();
 }
@@ -47,7 +47,8 @@ test("粘贴 → 确认身份 → 处理不确定内容 → 保存 → 在聊天
   await expect(page).toHaveURL(/tab=chats&saved=5/);
   await expect(page.getByTestId("saved-notice")).toContainText("已保存 5 条消息");
   await expect(page.getByRole("link", { name: "继续添加资料" })).toBeVisible();
-  await expect(page.getByRole("button", { name: /开始分析/ })).toBeDisabled();
+  // 保存后只提供入口，不会自动分析：由用户点击进入“分析与建议”再决定
+  await expect(page.getByRole("link", { name: "开始分析" })).toHaveAttribute("href", /tab=analysis/);
 
   await page.getByRole("link", { name: "查看" }).click();
   const list = page.getByTestId("message-list");

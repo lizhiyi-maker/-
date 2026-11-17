@@ -10,6 +10,7 @@ import { sniffImageType } from "@/domain/chat/image-type";
 import { findOverlaps, type KeyMessage } from "@/domain/chat/overlap";
 import type { ParsedMessage } from "@/domain/chat/types";
 import { Prisma } from "@/generated/prisma/client";
+import type { Consent } from "@/server/consent/service";
 import { lockPersonThenBatch, ownedBatch, stageMessages } from "@/server/imports/staging";
 
 export interface RecognitionJob {
@@ -26,6 +27,8 @@ export interface JobQueue {
 export interface RecognitionDeps {
   storage: FileStorage;
   quota: Quota;
+  /** 首次向 AI 服务商发送内容前必须已同意 */
+  consent: Pick<Consent, "assertAccepted">;
   vision: VisionModel;
   queue: JobQueue;
   now?: () => Date;
@@ -161,6 +164,7 @@ export function createRecognition(db: Db, deps: RecognitionDeps) {
 
   async function submitRound(userId: string, batchId: string, mode: "start" | "retry") {
     const batch = await ownedBatch(db, userId, batchId);
+    await deps.consent.assertAccepted(userId); // 截图会发送给 AI 服务商
     const target = mode === "start" ? "UPLOADED" : "FAILED";
     if (mode === "start" && batch.status !== "UPLOADING") throw new ValidationError("这批截图已经提交过识别");
     if (mode === "retry" && batch.status !== "RECOGNIZING") throw new ValidationError("没有可以重试的截图");

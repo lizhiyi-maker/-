@@ -70,3 +70,43 @@ export async function freshUser(browser: import("@playwright/test").Browser) {
   await smsLogin(page, randomPhone(), invite);
   return { ctx, page };
 }
+
+/** 在“AI 服务说明”卡片上点击同意（卡片出现时）。 */
+export async function acceptConsent(page: Page) {
+  const card = page.getByTestId("consent-card");
+  await expect(card).toBeVisible();
+  await card.getByRole("button", { name: "我已阅读并同意" }).click();
+  await expect(card).toHaveCount(0);
+}
+
+/** 通过界面粘贴并保存一批聊天文本（对象已有上次保存的“我/对方”设置时，需要再确认一次）。 */
+export async function importTextChat(page: Page, personId: string, text: string, opts: { prefilled?: boolean } = {}) {
+  await page.goto(`/people/${personId}/import/new`);
+  await waitForHydration(page);
+  await fillPastedText(page, text);
+  await page.getByRole("button", { name: "整理并进入确认" }).click();
+  await expect(page.getByRole("heading", { name: "确认导入的聊天" })).toBeVisible();
+  if (opts.prefilled) {
+    await page.getByRole("button", { name: "已按上次设置预填，确认无误" }).click();
+  } else {
+    for (const [label, role] of [["阿青", "对方"], ["我", "我"]] as const) {
+      const btn = page.getByRole("button", { name: `将“${label}”设为${role}` });
+      await btn.click();
+      await expect(btn).toHaveAttribute("aria-pressed", "true");
+    }
+  }
+  await page.getByRole("button", { name: "确认保存" }).click();
+  await expect(page.getByTestId("saved-notice")).toBeVisible();
+}
+
+/**
+ * 填写粘贴文本，并确认受控输入真的登记了（字数计数更新）。水合完成之前填入的内容会被 React 重置，
+ * 在负载高的 WebKit 上会发生，所以失败就重填。
+ */
+export async function fillPastedText(page: Page, text: string) {
+  await expect(async () => {
+    await page.getByLabel("粘贴聊天文本").fill(text);
+    // 计数从“0 / 20000 字”变成实际字数，说明受控输入已登记（注意不能用子串匹配：“120 /” 也含 “0 /”）
+    await expect(page.getByTestId("char-count")).not.toHaveText(/^\s*0 \//, { timeout: 1500 });
+  }).toPass({ timeout: 20_000 });
+}

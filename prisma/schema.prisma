@@ -39,6 +39,8 @@ model User {
   importBatches ImportBatch[]
   messages      Message[]
   screenshots   Screenshot[]
+  consents      ConsentRecord[]
+  analyses      Analysis[]
 }
 
 model Session {
@@ -158,6 +160,7 @@ model Person {
   batches     ImportBatch[]
   messages    Message[]
   screenshots Screenshot[]
+  analyses    Analysis[]
 
   @@index([userId, status])
 }
@@ -365,6 +368,67 @@ model MessageRevision {
   message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
 
   @@unique([messageId, revision])
+}
+
+// ───────── AI 服务同意与关系分析 ─────────
+
+/// 用户对“向 AI 服务商发送内容”的同意。文案版本或服务商变化时需要重新同意。
+model ConsentRecord {
+  id         String   @id @default(cuid())
+  userId     String
+  version    Int
+  providerId String
+  acceptedAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, version, providerId])
+}
+
+enum AnalysisStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  /// 输入资料在分析期间被删除或修改：丢弃结果并退还额度
+  INVALIDATED
+}
+
+/// 一次关系分析：输入资料快照 + 各类版本 + 校验后的结构化结果。结果保留，旧报告随时间推移显示为过期。
+model Analysis {
+  id                String         @id @default(cuid())
+  userId            String
+  personId          String
+  status            AnalysisStatus @default(QUEUED)
+  /// 提交时对象的代际；对象删除后迟到的任务不能写回
+  generation        Int
+  /// 提交（取快照）的时间，也是“资料截止时间”
+  snapshotAt        DateTime
+  messageCount      Int
+  /// 输入资料快照：按顺序的 [{ id, revision, batchId, dataKind, seq, speaker, type, occurredAt, timePrecision }]。
+  /// 内容不重复存放，按 (消息, 修订) 回查 MessageRevision 即可重建（修订只增不改，见 ADR-0002）。
+  snapshotRefs      Json
+  preferenceVersion Int
+  preferenceValues  Json
+  rulesVersion      String
+  promptVersion     String
+  modelId           String
+  /// 校验与程序核验后的结果（引用已解析为 消息ID + 修订）
+  output            Json?
+  /// 流水线信息：分段数、各维度核验记录、警告
+  meta              Json?
+  /// 对方是否明确拒绝（来自核验后的结果，供快速筛选与排名准入）
+  explicitRefusal   Boolean        @default(false)
+  errorCode         String?
+  queuedAt          DateTime
+  startedAt         DateTime?
+  finishedAt        DateTime?
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  person Person @relation(fields: [personId], references: [id], onDelete: Cascade)
+
+  @@index([personId, status, finishedAt])
+  @@index([userId, status])
 }
 
 // ───────── 偏好 ─────────

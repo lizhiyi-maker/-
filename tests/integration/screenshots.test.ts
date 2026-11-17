@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { newTestDb } from "../support/db";
 import { makeUser } from "../support/factories";
 import { makePng } from "../support/png";
+import { createConsent } from "@/server/consent/service";
 import { createImports } from "@/server/imports/service";
 import { createPeople } from "@/server/people/service";
 import { createQuota, InsufficientQuotaError } from "@/server/quota/ledger";
@@ -12,7 +13,7 @@ import { createRecognition, type RecognitionJob } from "@/server/recognition/ser
 import { createLocalStorage } from "@/server/storage/local";
 import { createMockVision } from "@/server/ai/mock-vision";
 import type { VisionModel } from "@/server/ai/vision";
-import { NotFoundError, ValidationError } from "@/server/errors";
+import { ConsentRequiredError, NotFoundError, ValidationError } from "@/server/errors";
 import { purgeOrphanFiles, purgeRevokedOriginals, purgeStaleBatches } from "@/server/maintenance";
 
 let ctx: Awaited<ReturnType<typeof newTestDb>>;
@@ -35,11 +36,13 @@ function env(opts: { vision?: VisionModel } = {}) {
   const storage = createLocalStorage({ dir, secret, now: () => now });
   const quota = createQuota(ctx.db, { now: () => now });
   const vision = { current: opts.vision ?? createMockVision() };
+  const consent = createConsent(ctx.db, { providerId: "mock", now: () => now });
   const make = () => ({
     imports: createImports(ctx.db, { storage, quota, now: () => now }),
     rec: createRecognition(ctx.db, {
       storage,
       quota,
+      consent,
       vision: { recognize: (i) => vision.current.recognize(i) },
       queue: { enqueue: async (job) => void jobs.push(job) },
       now: () => now,
@@ -48,6 +51,7 @@ function env(opts: { vision?: VisionModel } = {}) {
   const first = make();
   return {
     ...first,
+    consent,
     make,
     storage,
     quota,
@@ -64,8 +68,9 @@ function env(opts: { vision?: VisionModel } = {}) {
 const people = () => createPeople(ctx.db);
 let seq = 0;
 /** 一个用户 + 一个对象 + 一个截图批次 */
-async function setup(e: ReturnType<typeof env>) {
+async function setup(e: ReturnType<typeof env>, opts: { consented?: boolean } = {}) {
   const user = await makeUser(ctx.db);
+  if (opts.consented !== false) await e.consent.accept(user.id);
   const person = await people().create(user.id, { nickname: `阿青${seq++}` });
   const batch = await e.imports.createBatch(user.id, person.id, { platform: "WECHAT", dataKind: "CONTINUOUS", sourceKind: "SCREENSHOT" });
   return { user, person, batch };
@@ -152,6 +157,20 @@ describe("上传截图", () => {
     await e.rec.start(user.id, batch.id);
     await expect(e.rec.addScreenshot(user.id, batch.id, shot(["阿青：晚了"]))).rejects.toBeInstanceOf(ValidationError);
     await expect(e.rec.removeScreenshot(user.id, b)).rejects.toBeInstanceOf(ValidationError);
+  });
+});
+
+describe("AI 服务同意关卡", () => {
+  it("未同意不能开始识别：没有任何内容被提交，额度不动；同意之后可以", async () => {
+    const e = env();
+    const { user, batch } = await setup(e, { consented: false });
+    await add(e, user.id, batch.id, ["阿青：一"]);
+    await expect(e.rec.start(user.id, batch.id)).rejects.toBeInstanceOf(ConsentRequiredError);
+    expect(e.jobs).toHaveLength(0);
+    expect(await available(e, user.id)).toBe(120);
+    expect((await e.rec.getProgress(user.id, batch.id)).status).toBe("UPLOADING");
+    await e.consent.accept(user.id);
+    expect(await e.rec.start(user.id, batch.id)).toEqual({ queued: 1 });
   });
 });
 
@@ -396,14 +415,16 @@ describe("批次删除与删除围栏", () => {
     expect(await ctx.db.quotaEntry.count({ where: { userId: user.id, type: "SETTLE" } })).toBe(0);
   });
 
-  it("删除对象后，迟到的识别任务同样不能写回", async () => {
+  it("删除对象后，迟到的识别任务同样不能写回，且已预留的识别额度退还", async () => {
     const e = env();
     const { user, person, batch } = await setup(e);
     await add(e, user.id, batch.id, ["阿青：一"]);
     await e.rec.start(user.id, batch.id);
-    await people().remove(user.id, person.id);
+    expect(await available(e, user.id)).toBe(119);
+    await createPeople(ctx.db, { quota: e.quota }).remove(user.id, person.id);
     await e.drain();
     expect(await ctx.db.message.count({ where: { personId: person.id } })).toBe(0);
+    expect(await available(e, user.id)).toBe(120);
   });
 });
 

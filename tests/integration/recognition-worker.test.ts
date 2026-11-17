@@ -6,6 +6,7 @@ import { newTestDb } from "../support/db";
 import { makeUser } from "../support/factories";
 import { makePng } from "../support/png";
 import { createMockVision } from "@/server/ai/mock-vision";
+import { createConsent } from "@/server/consent/service";
 import { createImports } from "@/server/imports/service";
 import { createPeople } from "@/server/people/service";
 import { createPgBossQueue } from "@/server/queue";
@@ -40,12 +41,14 @@ describe("识别任务经 pg-boss 由独立 worker 执行", () => {
     const storage = createLocalStorage({ dir, secret: "test-storage-signing-secret-0123456789" });
     const quota = createQuota(ctx.db);
     const queue = createPgBossQueue(ctx.url);
-    const web = createRecognition(ctx.db, { storage, quota, queue, vision: { recognize: async () => ({ messages: [] }) } }); // Web 进程不执行识别
-    const workerRec = createRecognition(ctx.db, { storage, quota, queue, vision: createMockVision() });
+    const consent = createConsent(ctx.db, { providerId: "mock" });
+    const web = createRecognition(ctx.db, { storage, quota, queue, consent, vision: { recognize: async () => ({ messages: [] }) } }); // Web 进程不执行识别
+    const workerRec = createRecognition(ctx.db, { storage, quota, queue, consent, vision: createMockVision() });
     const worker = await startWorker(ctx.url, undefined, { db: ctx.db, recognition: workerRec, storage });
     try {
       const imports = createImports(ctx.db, { storage, quota });
       const user = await makeUser(ctx.db);
+      await consent.accept(user.id);
       const person = await createPeople(ctx.db).create(user.id, { nickname: "阿青" });
       const batch = await imports.createBatch(user.id, person.id, { platform: "WECHAT", dataKind: "CONTINUOUS", sourceKind: "SCREENSHOT" });
       for (const text of ["阿青：在吗\n我：在", "我：在\n阿青：周六有空吗"]) {

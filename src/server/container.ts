@@ -2,10 +2,15 @@ import { resolve } from "node:path";
 import { createHmac } from "node:crypto";
 import { getEnv, type Env } from "@/lib/env";
 import { getDb } from "@/server/db";
+import type { AnalysisModel } from "@/server/ai/analysis-model";
+import { createMockAnalysisModel } from "@/server/ai/mock-analysis";
 import { createMockVision } from "@/server/ai/mock-vision";
 import type { VisionModel } from "@/server/ai/vision";
 import { createAdmin } from "@/server/admin/service";
+import { createAnalysis } from "@/server/analysis/service";
 import { createAuth } from "@/server/auth/service";
+import { createConsent } from "@/server/consent/service";
+import { providerInfo } from "@/domain/consent";
 import { createImports } from "@/server/imports/service";
 import { createPeople } from "@/server/people/service";
 import { createPreferences } from "@/server/preferences/service";
@@ -40,6 +45,11 @@ function buildVision(env: Env): VisionModel {
   throw new Error(`AI 提供方 ${env.AI_PROVIDER} 尚未实现`);
 }
 
+function buildAnalysisModel(env: Env): AnalysisModel {
+  if (env.AI_PROVIDER === "mock") return createMockAnalysisModel();
+  throw new Error(`AI 提供方 ${env.AI_PROVIDER} 尚未实现`);
+}
+
 function build() {
   const env = getEnv();
   const db = getDb();
@@ -47,16 +57,28 @@ function build() {
   const storage = buildStorage(env);
   const quota = createQuota(db);
   const queue = createPgBossQueue(env.DATABASE_URL);
+  const provider = providerInfo(env.AI_PROVIDER);
+  const consent = createConsent(db, { providerId: provider.id });
+  const preferences = createPreferences(db);
   return {
     env,
     db,
     keys,
     storage,
     auth: createAuth(db, { sms: buildSms(env.SMS_PROVIDER), keys }),
-    people: createPeople(db),
+    provider,
+    consent,
+    people: createPeople(db, { quota }),
     imports: createImports(db, { storage, quota }),
-    recognition: createRecognition(db, { storage, quota, vision: buildVision(env), queue }),
-    preferences: createPreferences(db),
+    recognition: createRecognition(db, { storage, quota, consent, vision: buildVision(env), queue }),
+    analysis: createAnalysis(db, {
+      quota,
+      consent,
+      preferences,
+      model: buildAnalysisModel(env),
+      queue: { enqueue: (job) => queue.enqueueAnalysis(job) },
+    }),
+    preferences,
     quota,
     admin: createAdmin(db, { keys }),
   };

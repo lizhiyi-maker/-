@@ -22,3 +22,11 @@ export function isDomainError(e: unknown, ...names: string[]): e is Error {
 }
 
 export const isNotFound = (e: unknown) => isDomainError(e, "NotFoundError");
+
+/** 尚未同意向 AI 服务商发送内容（截图识别、关系分析之前必须同意）。 */
+export class ConsentRequiredError extends Error {
+  constructor() {
+    super("请先阅读并同意“AI 服务说明”，再使用截图识别或关系分析");
+    this.name = "ConsentRequiredError";
+  }
+}

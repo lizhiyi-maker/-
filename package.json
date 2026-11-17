@@ -13,6 +13,7 @@
     "start": "next start",
     "worker": "tsx --env-file-if-exists=.env src/worker/index.ts",
     "db:dev": "tsx scripts/dev-db.ts",
+    "eval:analysis": "tsx scripts/eval-analysis.ts",
     "admin:create": "tsx --env-file-if-exists=.env scripts/create-admin.ts",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",

@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { makeChatScreenshot } from "./chat-image";
-import { createPerson, freshUser, uniqueName, waitForHydration } from "./helpers";
+import { acceptConsent, createPerson, freshUser, uniqueName, waitForHydration } from "./helpers";
 
 async function startScreenshotBatch(page: Page, personId: string) {
   await page.goto(`/people/${personId}/import/new?mode=screenshot`);
@@ -33,6 +33,10 @@ test("上传多张模拟截图 → 开始识别 → 刷新后进度仍在 → �
   await input.setInputFiles([{ name: "x.png", mimeType: "image/png", buffer: Buffer.from("not an image at all") }]);
   await expect(page.getByTestId("upload-items")).toContainText("只支持 PNG、JPEG、WebP");
   await expect(page.getByTestId("shot-list").getByRole("listitem")).toHaveCount(2);
+
+  // 首次向 AI 服务商发送内容之前必须先同意；同意前看不到“开始识别”
+  await expect(page.getByRole("button", { name: "开始识别" })).toHaveCount(0);
+  await acceptConsent(page);
 
   // 上传不会自动识别，也不扣额度
   await expect(page.getByTestId("quota-hint")).toContainText("将识别 2 张");
@@ -87,6 +91,7 @@ test("部分识别失败：失败的不扣额度，可以跳过后用已识别�
   const bad = await makeChatScreenshot(page, ["阿青：看不清"], "[[FAIL]]");
   await page.getByTestId("screenshot-input").setInputFiles([png("good.png", good), png("bad.png", bad)]);
   await expect(page.getByTestId("shot-list").getByRole("listitem")).toHaveCount(2);
+  await acceptConsent(page);
   await page.getByRole("button", { name: "开始识别" }).click();
 
   await expect(page.getByTestId("progress-text")).toContainText("有 1 张识别失败", { timeout: 45_000 });
@@ -109,6 +114,7 @@ test("放弃截图批次：已预留的识别额度退还", async ({ browser }) 
   const slow = await makeChatScreenshot(page, ["阿青：慢一点"], "[[SLOW:20000]]");
   await page.getByTestId("screenshot-input").setInputFiles([png("slow.png", slow)]);
   await expect(page.getByTestId("shot-list").getByRole("listitem")).toHaveCount(1);
+  await acceptConsent(page);
   await page.getByRole("button", { name: "开始识别" }).click();
   await expect(page.getByTestId("progress-card")).toBeVisible();
 

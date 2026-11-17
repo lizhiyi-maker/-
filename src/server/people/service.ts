@@ -12,6 +12,7 @@ import {
   type PersonPatch,
 } from "@/domain/people";
 import type { Feeling } from "@/generated/prisma/enums";
+import type { Quota } from "@/server/quota/ledger";
 
 export { NotFoundError, ValidationError };
 
@@ -43,7 +44,7 @@ export async function lockLivePerson(tx: Tx, userId: string, personId: string, g
  * 对象服务。所有方法的第一个参数都是 userId，并且每条查询都以 userId 限定范围；
  * 访问不属于该用户的对象与访问不存在的对象表现一致（NotFoundError），不泄露其存在。
  */
-export function createPeople(db: Db) {
+export function createPeople(db: Db, opts: { quota?: Quota } = {}) {
   async function owned(client: Db | Tx, userId: string, personId: string) {
     const p = await client.person.findFirst({ where: { id: personId, userId, status: "ACTIVE" } });
     if (!p) throw new NotFoundError("对象");
@@ -109,13 +110,21 @@ export function createPeople(db: Db) {
    * 与 withLivePerson 的共享锁互斥，因此任务写回要么在删除前完整提交，要么被拒绝。
    */
   async function remove(userId: string, personId: string) {
-    await db.$transaction(async (tx) => {
+    // 对象删除会级联删除其批次与分析；这些任务已预留但未结算的额度需要退还
+    const open = await db.$transaction(async (tx) => {
       const rows = await tx.$queryRaw<{ id: string }[]>`
         SELECT "id" FROM "Person" WHERE "id" = ${personId} AND "userId" = ${userId} AND "status" = 'ACTIVE' FOR UPDATE`;
       if (rows.length === 0) throw new NotFoundError("对象");
+      const batches = await tx.importBatch.findMany({ where: { personId }, select: { id: true } });
+      const analyses = await tx.analysis.findMany({ where: { personId }, select: { id: true } });
       await tx.person.update({ where: { id: personId }, data: { status: "DELETING", generation: { increment: 1 } } });
       await tx.person.delete({ where: { id: personId } });
+      return { batchIds: batches.map((b) => b.id), analysisIds: analyses.map((a) => a.id) };
     });
+    if (opts.quota) {
+      for (const id of open.batchIds) await opts.quota.releaseOpen(userId, "SCREENSHOT", `rec:${id}:`, "对象已删除，退还识别额度");
+      for (const id of open.analysisIds) await opts.quota.releaseOpen(userId, "ANALYSIS", `analysis:${id}`, "对象已删除，退还分析额度");
+    }
   }
 
   /**

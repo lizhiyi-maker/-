@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Plus } from "lucide-react";
 import { Badge, Card, EmptyState } from "@/components/ui/card";
+import { FRESHNESS_LABEL } from "@/domain/analysis/freshness";
 import { BATCH_STATUS_LABEL } from "@/domain/imports";
 import { FEELING_LABEL, STAGE_LABEL, type GenderFilter } from "@/domain/people";
 import { cn } from "@/lib/utils";
@@ -17,8 +18,8 @@ export default async function HomePage({ searchParams }: { searchParams: Promise
   const user = await requireUser();
   const { gender } = await searchParams;
   const filter: GenderFilter = gender === "MALE" || gender === "FEMALE" ? gender : "ALL";
-  const { people: peopleService, imports } = getServices();
-  const [people, pending] = await Promise.all([peopleService.list(user.id, filter), imports.listPending(user.id)]);
+  const { people: peopleService, imports, analysis } = getServices();
+  const [people, pending, analysisTodo] = await Promise.all([peopleService.list(user.id, filter), imports.listPending(user.id), analysis.listTodo(user.id)]);
 
   return (
     <section className="space-y-5">
@@ -35,12 +36,23 @@ export default async function HomePage({ searchParams }: { searchParams: Promise
 
       <Card>
         <h2 className="mb-1 text-sm font-semibold">待办</h2>
-        {pending.length === 0 ? (
+        {pending.length === 0 && analysisTodo.length === 0 ? (
           <p className="text-sm text-muted-foreground" data-testid="todo-empty">
             暂无待确认或待分析事项。导入聊天资料后，待确认的内容和有新资料待分析的对象会显示在这里。
           </p>
         ) : (
           <ul className="divide-y text-sm" data-testid="todo-pending">
+            {analysisTodo.map((t) => (
+              <li key={`a-${t.personId}`} className="flex items-center justify-between gap-2 py-2" data-testid="todo-analysis">
+                <span>
+                  <span className="font-medium">{t.nickname}</span>
+                  <span className="ml-2 text-muted-foreground">{t.reason === "NEVER" ? "有资料待分析" : FRESHNESS_LABEL[t.reason].label}</span>
+                </span>
+                <Link href={`/people/${t.personId}?tab=analysis`} className="shrink-0 text-primary">
+                  去分析
+                </Link>
+              </li>
+            ))}
             {pending.map((b) => (
               <li key={b.id} className="flex items-center justify-between gap-2 py-2">
                 <span>

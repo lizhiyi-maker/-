@@ -8,7 +8,7 @@ export interface FormState {
 
 /** 把领域错误转成可展示的中文消息；未知错误只返回通用提示，不泄露细节。 */
 export function toMessage(e: unknown): string {
-  if (isDomainError(e, "AuthError", "ValidationError", "NotFoundError", "ForbiddenError", "QuotaError", "InsufficientQuotaError")) {
+  if (isDomainError(e, "AuthError", "ValidationError", "NotFoundError", "ForbiddenError", "QuotaError", "InsufficientQuotaError", "ConsentRequiredError")) {
     return e.message;
   }
   console.error("[action]", e instanceof Error ? e.name : "unknown");

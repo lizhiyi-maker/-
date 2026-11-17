@@ -14,7 +14,7 @@ npm run dev                 # 终端 2：Web  http://localhost:3000
 npm run worker              # 终端 3：后台任务 worker（pg-boss）
 ```
 
-**识别截图需要 worker 运行**（`npm run worker`）：上传的截图由它调用识别模型（本地为模拟模型，读取 PNG 内嵌的转写文本）。Web 与 worker 共用同一个本地存储目录（`STORAGE_LOCAL_DIR`，默认 `.data/uploads`，已在 `.gitignore` 中）。
+**关系分析与截图识别都需要 worker 运行**（`npm run worker`）：上传的截图由它调用识别模型（本地为模拟模型，读取 PNG 内嵌的转写文本）。Web 与 worker 共用同一个本地存储目录（`STORAGE_LOCAL_DIR`，默认 `.data/uploads`，已在 `.gitignore` 中）。
 
 首次启动需要为开发库建表：`DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54329/relationship npm run db:deploy`。
 演示模式下登录页提供“演示用户 / 演示管理员登录”按钮；也可走完整的手机号验证码流程（验证码会显示在页面上，管理员后台可生成邀请码）。
@@ -31,6 +31,7 @@ npm run lint
 npm test            # 单元 + 集成（集成测试自动启动临时 PostgreSQL）
 npm run test:e2e    # Playwright：iPhone 14 (WebKit)、Pixel 7、桌面 Chrome；自动启动独立的临时数据库；首次需 `npx playwright install chromium webkit`
 npm run build
+npm run eval:analysis   # 分析流水线安全评测（模拟模型），写入 docs/evals/
 ```
 
 ## 演示模式与生产保护

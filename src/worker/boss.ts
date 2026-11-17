@@ -2,6 +2,7 @@ import { PgBoss } from "pg-boss";
 import { QUEUES } from "./queues";
 import { createDb, type Db } from "@/server/db";
 import { purgeExpired, purgeOrphanFiles, purgeRevokedOriginals, purgeStaleBatches } from "@/server/maintenance";
+import type { AnalysisJob, AnalysisService } from "@/server/analysis/service";
 import type { Recognition, RecognitionJob } from "@/server/recognition/service";
 import type { FileStorage } from "@/server/storage/types";
 
@@ -19,7 +20,7 @@ export function createBoss(databaseUrl: string): PgBoss {
 export async function startWorker(
   databaseUrl: string,
   onHeartbeat: (p: HeartbeatPayload) => void = () => {},
-  opts: { db?: Db; recognition?: Recognition; storage?: FileStorage } = {},
+  opts: { db?: Db; recognition?: Recognition; analysis?: AnalysisService; storage?: FileStorage } = {},
 ) {
   const db = opts.db ?? createDb(databaseUrl);
   const boss = createBoss(databaseUrl);
@@ -53,6 +54,19 @@ export async function startWorker(
     await boss.schedule(QUEUES.sweepRecognition, "*/5 * * * *");
     await boss.work(QUEUES.sweepRecognition, async () => {
       await recognition.sweepStuck();
+    });
+  }
+  if (opts.analysis) {
+    const analysis = opts.analysis;
+    await boss.createQueue(QUEUES.analysis);
+    await boss.work<AnalysisJob>(QUEUES.analysis, async (jobs) => {
+      for (const job of jobs) await analysis.process(job.data);
+    });
+    // 每 5 分钟把卡住的分析判为失败并退还额度
+    await boss.createQueue(QUEUES.sweepAnalysis);
+    await boss.schedule(QUEUES.sweepAnalysis, "*/5 * * * *");
+    await boss.work(QUEUES.sweepAnalysis, async () => {
+      await analysis.sweepStuck();
     });
   }
   return {
