@@ -14,6 +14,8 @@ npm run dev                 # 终端 2：Web  http://localhost:3000
 npm run worker              # 终端 3：后台任务 worker（pg-boss）
 ```
 
+**识别截图需要 worker 运行**（`npm run worker`）：上传的截图由它调用识别模型（本地为模拟模型，读取 PNG 内嵌的转写文本）。Web 与 worker 共用同一个本地存储目录（`STORAGE_LOCAL_DIR`，默认 `.data/uploads`，已在 `.gitignore` 中）。
+
 首次启动需要为开发库建表：`DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54329/relationship npm run db:deploy`。
 演示模式下登录页提供“演示用户 / 演示管理员登录”按钮；也可走完整的手机号验证码流程（验证码会显示在页面上，管理员后台可生成邀请码）。
 
@@ -51,3 +53,9 @@ npm run build
 | `docs/` | 方案、业务规范、评分规则、ADR |
 | `tests/` | `unit`、`integration`、`e2e` |
 | `scripts/` | 开发数据库等脚本 |
+
+## 已知的坑
+
+- **不要在服务端代码里写带字面量路径的 `resolve(".xxx")` / `join(process.cwd(), ...)`**。Turbopack 会把它当成对项目目录的文件依赖，开发服务器自己写的 `.next/dev/trace` 又会触发重新编译，页面会无限整页重载（实测 8 秒 343 次，e2e 随机超时）。存储目录的默认值放在 [src/lib/env.ts](src/lib/env.ts) 的 zod schema 里，见 [src/server/container.ts](src/server/container.ts) 的注释。
+- 边缘层（`src/app/` 下的页面、路由、Server Action）判断领域错误用 `isDomainError(e, "名称")`，不要用 `instanceof`：Next 会把它们分别打包，每份可能带有自己的 `errors.ts` 副本，而服务容器是进程内单例。
+- e2e 的数据库、上传目录和测试产物都放在系统临时目录，不要放进仓库：开发服务器监视项目目录，运行期间在项目内写文件可能触发整页重载。

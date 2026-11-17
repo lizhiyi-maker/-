@@ -24,7 +24,8 @@ export async function devLogin(page: Page, kind: "user" | "admin" = "user") {
 /** 管理员后台生成一个一次性邀请码，返回邀请码文本。 */
 export async function createInviteAsAdmin(page: Page): Promise<string> {
   await devLogin(page, "admin");
-  await page.getByLabel("可使用次数").fill("1");
+  // 并行用例可能取到同一行邀请码，所以给足使用次数
+  await page.getByLabel("可使用次数").fill("1000");
   await page.getByRole("button", { name: "生成邀请码" }).click();
   await expect(page.getByText("邀请码已生成")).toBeVisible();
   const first = page.getByTestId("invite-table").locator("tbody tr").first().locator("td").first();
@@ -48,4 +49,24 @@ export async function smsLogin(page: Page, phone: string, inviteCode: string) {
   await page.getByLabel(/邀请码/).fill(inviteCode);
   await page.getByRole("button", { name: "登录", exact: true }).click();
   await expect(page.getByRole("heading", { name: "对象" })).toBeVisible();
+}
+
+/** 通过界面创建对象，返回对象 ID。 */
+export async function createPerson(page: Page, name: string): Promise<string> {
+  await page.goto("/people/new");
+  await page.getByLabel("昵称或代号").fill(name);
+  await page.getByRole("button", { name: "创建对象" }).click();
+  await expect(page.getByRole("heading", { name }).first()).toBeVisible();
+  return page.url().split("/people/")[1].split("?")[0];
+}
+
+/** 一个独立的新用户（邀请码 + 验证码登录），用于需要精确断言额度的用例。 */
+export async function freshUser(browser: import("@playwright/test").Browser) {
+  const adminCtx = await browser.newContext();
+  const invite = await createInviteAsAdmin(await adminCtx.newPage());
+  await adminCtx.close();
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
+  await smsLogin(page, randomPhone(), invite);
+  return { ctx, page };
 }

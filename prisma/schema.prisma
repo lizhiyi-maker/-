@@ -38,6 +38,7 @@ model User {
   quotaEntries  QuotaEntry[]
   importBatches ImportBatch[]
   messages      Message[]
+  screenshots   Screenshot[]
 }
 
 model Session {
@@ -151,11 +152,12 @@ model Person {
   createdAt        DateTime     @default(now())
   updatedAt        DateTime     @updatedAt
 
-  user     User              @relation(fields: [userId], references: [id], onDelete: Cascade)
-  accounts PlatformAccount[]
-  feelings FeelingEntry[]
-  batches  ImportBatch[]
-  messages Message[]
+  user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accounts    PlatformAccount[]
+  feelings    FeelingEntry[]
+  batches     ImportBatch[]
+  messages    Message[]
+  screenshots Screenshot[]
 
   @@index([userId, status])
 }
@@ -261,10 +263,13 @@ model ImportBatch {
   createdAt           DateTime    @default(now())
   updatedAt           DateTime    @updatedAt
   confirmedAt         DateTime?
+  /// 识别轮次：每次"开始识别"/"重试失败项"加 1；额度预留以轮次为单位
+  recRound            Int         @default(0)
 
-  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  person   Person    @relation(fields: [personId], references: [id], onDelete: Cascade)
-  messages Message[]
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  person      Person       @relation(fields: [personId], references: [id], onDelete: Cascade)
+  messages    Message[]
+  screenshots Screenshot[]
 
   @@index([personId, status])
   @@index([userId, status])
@@ -301,6 +306,52 @@ model Message {
 
   @@unique([batchId, seq])
   @@index([personId, state])
+}
+
+enum ScreenshotStatus {
+  UPLOADED
+  QUEUED
+  RUNNING
+  DONE
+  FAILED
+  /// 用户选择跳过识别失败的截图
+  SKIPPED
+}
+
+/// 用户上传的聊天截图（原图）。确认保存后停止访问并清理文件，行保留（仅留哈希用于跨批次查重）。
+model Screenshot {
+  id          String           @id @default(cuid())
+  userId      String
+  personId    String
+  batchId     String
+  /// 批次内顺序（上传顺序）
+  idx         Int
+  sha256      String
+  contentType String
+  sizeBytes   Int
+  storageKey  String           @unique
+  status      ScreenshotStatus @default(UPLOADED)
+  /// 所属识别轮次（ImportBatch.recRound）；未提交识别时为空
+  round       Int?
+  attempts    Int              @default(0)
+  errorCode   String?
+  /// 识别出的消息（整合进暂存消息前的中间结果，整合后清空）
+  result      Json?
+  createdAt   DateTime         @default(now())
+  /// 提交识别的时间；用于发现卡住的任务
+  queuedAt    DateTime?
+  finishedAt  DateTime?
+  /// 确认保存后置位：立即停止访问，由清理任务删除文件
+  revokedAt   DateTime?
+  purgedAt    DateTime?
+
+  user   User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  person Person      @relation(fields: [personId], references: [id], onDelete: Cascade)
+  batch  ImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@unique([batchId, idx])
+  @@index([personId, sha256])
+  @@index([batchId, status])
 }
 
 /// 内容只存在于修订中；编辑产生新修订，证据引用 消息+修订（见 ADR-0002）

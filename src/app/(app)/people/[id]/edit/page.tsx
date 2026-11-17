@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { updatePersonAction } from "@/app/actions/people";
 import { PersonForm } from "@/components/person-form";
-import { NotFoundError } from "@/server/people/service";
+import { isNotFound } from "@/server/errors";
 import { getServices } from "@/server/container";
 import { requireUser } from "@/server/session";
 
@@ -11,7 +11,7 @@ export default async function EditPersonPage({ params }: { params: Promise<{ id:
   const user = await requireUser();
   const person = await getServices()
     .people.get(user.id, id)
-    .catch((e) => (e instanceof NotFoundError ? null : Promise.reject(e)));
+    .catch((e) => (isNotFound(e) ? null : Promise.reject(e)));
   if (!person) notFound();
   return (
     <section className="mx-auto max-w-xl">

@@ -1,10 +1,10 @@
-import { randomUUID } from "node:crypto";
 import type { Db } from "@/server/db";
 import { NotFoundError, ValidationError } from "@/server/errors";
-import { lockLivePerson, type Tx } from "@/server/people/service";
+import type { Tx } from "@/server/people/service";
 import { quotaConfig, type QuotaConfig } from "@/server/quota/config";
+import type { Quota } from "@/server/quota/ledger";
+import type { FileStorage } from "@/server/storage/types";
 import { parseChatText } from "@/domain/chat/parser";
-import { findOverlaps, type KeyMessage } from "@/domain/chat/overlap";
 import {
   createBatchSchema,
   dataKindSchema,
@@ -13,10 +13,8 @@ import {
   type CreateBatchInput,
   type EditMessageInput,
 } from "@/domain/imports";
-import type { DataKind, Speaker } from "@/generated/prisma/enums";
-
-type Role = "SELF" | "OTHER";
-type LabelRoles = Record<string, Role>;
+import type { DataKind } from "@/generated/prisma/enums";
+import { lockBatch, lockPersonThenBatch, ownedBatch, recomputeOverlap, rolesOf, stageMessages, type LabelRoles, type Role } from "./staging";
 
 function parse<T>(
   schema: { safeParse: (v: unknown) => { success: true; data: T } | { success: false; error: { issues: { message: string }[] } } },
@@ -30,6 +28,10 @@ function parse<T>(
 export interface ImportsOptions {
   now?: () => Date;
   config?: QuotaConfig;
+  /** 截图原图所在的存储；删除批次时一并删除文件 */
+  storage?: FileStorage;
+  /** 额度账本；删除批次时退还尚未结算的识别额度 */
+  quota?: Quota;
 }
 
 /**
@@ -43,64 +45,14 @@ export function createImports(db: Db, opts: ImportsOptions = {}) {
 
   // ───────── 归属与加锁 ─────────
 
-  async function ownedBatch(client: Db | Tx, userId: string, batchId: string) {
-    const b = await client.importBatch.findFirst({ where: { id: batchId, userId } });
-    if (!b) throw new NotFoundError("导入批次");
-    return b;
-  }
-
-  /** 锁定批次行（归属校验在 SQL 内）：改变批次的操作用 UPDATE，编辑消息用 SHARE；都与删除互斥。 */
-  async function lockBatch(tx: Tx, userId: string, batchId: string, mode: "UPDATE" | "SHARE") {
-    const rows =
-      mode === "UPDATE"
-        ? await tx.$queryRaw<{ id: string }[]>`SELECT "id" FROM "ImportBatch" WHERE "id" = ${batchId} AND "userId" = ${userId} FOR UPDATE`
-        : await tx.$queryRaw<{ id: string }[]>`SELECT "id" FROM "ImportBatch" WHERE "id" = ${batchId} AND "userId" = ${userId} FOR SHARE`;
-    if (rows.length === 0) throw new NotFoundError("导入批次");
-    return ownedBatch(tx, userId, batchId);
-  }
-
   async function ownedMessage(client: Db | Tx, userId: string, messageId: string) {
     const m = await client.message.findFirst({ where: { id: messageId, userId } });
     if (!m) throw new NotFoundError("消息");
     return m;
   }
 
-  const rolesOf = (b: { labelRoles: unknown }) => (b.labelRoles ?? {}) as LabelRoles;
-
   function assertPending(batch: { status: string }) {
     if (batch.status !== "PENDING_CONFIRM") throw new ValidationError("该批次不在待确认状态");
-  }
-
-  // ───────── 重叠检测（跨批次，随身份与内容变化重算）─────────
-
-  /**
-   * 重新计算暂存消息与同一对象已保存消息的重叠，返回重叠条数。
-   * 发言人未确认的消息不参与（不可能被判定为同一条）。
-   */
-  async function recomputeOverlap(tx: Tx, batch: { id: string; userId: string; personId: string }): Promise<number> {
-    const latest = { revisions: { orderBy: { revision: "desc" as const }, take: 1 } };
-    const staged = await tx.message.findMany({ where: { batchId: batch.id, state: "STAGED" }, orderBy: { seq: "asc" }, include: latest });
-    const existing = await tx.message.findMany({
-      where: { userId: batch.userId, personId: batch.personId, state: "CONFIRMED" },
-      orderBy: [{ batch: { confirmedAt: "asc" } }, { seq: "asc" }],
-      include: latest,
-    });
-    // 发言人未知的消息用唯一内容占位，保证不与任何消息相同，同时保持相邻关系
-    const key = (m: (typeof staged)[number]): KeyMessage => ({
-      speaker: m.speaker,
-      content: m.speaker === "UNKNOWN" ? `\u0000${m.id}` : (m.revisions[0]?.content ?? ""),
-      occurredAt: m.occurredAt,
-      timePrecision: m.timePrecision,
-    });
-    const overlaps = findOverlaps(existing.map(key), staged.map(key));
-
-    let count = 0;
-    for (const [i, m] of staged.entries()) {
-      const target = overlaps.has(i) ? existing[overlaps.get(i)!].id : null;
-      if (target) count++;
-      if (m.duplicateOfId !== target) await tx.message.update({ where: { id: m.id }, data: { duplicateOfId: target } });
-    }
-    return count;
   }
 
   // ───────── 批次与提交 ─────────
@@ -109,7 +61,7 @@ export function createImports(db: Db, opts: ImportsOptions = {}) {
     const data = parse(createBatchSchema, input);
     const person = await db.person.findFirst({ where: { id: personId, userId, status: "ACTIVE" }, select: { id: true } });
     if (!person) throw new NotFoundError("对象");
-    return db.importBatch.create({ data: { ...data, userId, personId, sourceKind: "TEXT" } });
+    return db.importBatch.create({ data: { ...data, userId, personId } });
   }
 
   async function submitText(userId: string, batchId: string, text: string) {
@@ -121,43 +73,14 @@ export function createImports(db: Db, opts: ImportsOptions = {}) {
     if (parsed.messages.length === 0) throw new ValidationError("没有识别出任何消息，请检查粘贴的内容");
 
     return db.$transaction(async (tx) => {
-      const batch = await lockBatch(tx, userId, batchId, "UPDATE");
-      await lockLivePerson(tx, userId, batch.personId);
+      const batch = await lockPersonThenBatch(tx, userId, batchId);
       if (batch.status !== "UPLOADING" || batch.sourceKind !== "TEXT") throw new ValidationError("该批次已经提交过资料");
-
-      // 按上次保存的设置预填“我/对方”，但仍需用户确认后才能保存
-      const previous = await tx.importBatch.findFirst({
-        where: { userId, personId: batch.personId, platform: batch.platform, status: "CONFIRMED", identityConfirmedAt: { not: null } },
-        orderBy: { confirmedAt: "desc" },
+      const staged = await stageMessages(tx, batch, {
+        messages: parsed.messages,
+        parserId: parsed.parserId,
+        originOf: (m) => ({ kind: "text", line: m.line }),
       });
-      const prefilled: LabelRoles = {};
-      for (const { label } of parsed.labels) {
-        const r = previous ? rolesOf(previous)[label] : undefined;
-        if (r) prefilled[label] = r;
-      }
-
-      const rows = parsed.messages.map((m, seq) => ({ id: randomUUID(), seq, m }));
-      await tx.message.createMany({
-        data: rows.map(({ id, seq, m }) => ({
-          id,
-          userId,
-          personId: batch.personId,
-          batchId,
-          seq,
-          speaker: (m.speakerLabel ? (prefilled[m.speakerLabel] ?? "UNKNOWN") : "UNKNOWN") as Speaker,
-          speakerLabel: m.speakerLabel,
-          type: m.type,
-          occurredAt: m.occurredAt,
-          timePrecision: m.timePrecision,
-          origin: { kind: "text", line: m.line },
-          recognition: m.uncertain ? ("UNCERTAIN" as const) : ("RECOGNIZED" as const),
-          uncertainReason: m.reason ?? null,
-        })),
-      });
-      await tx.messageRevision.createMany({ data: rows.map(({ id, m }) => ({ messageId: id, revision: 1, content: m.content })) });
-      await tx.importBatch.update({ where: { id: batchId }, data: { status: "PENDING_CONFIRM", parserId: parsed.parserId, labelRoles: prefilled } });
-      if (Object.keys(prefilled).length > 0) await recomputeOverlap(tx, batch);
-      return { messages: parsed.messages.length, uncertain: parsed.messages.filter((m) => m.uncertain).length, labels: parsed.labels };
+      return { messages: staged.messages, uncertain: staged.uncertain, labels: parsed.labels };
     });
   }
 
@@ -352,8 +275,7 @@ export function createImports(db: Db, opts: ImportsOptions = {}) {
 
   async function confirm(userId: string, batchId: string, options: { keepOverlap?: boolean } = {}) {
     return db.$transaction(async (tx) => {
-      const batch = await lockBatch(tx, userId, batchId, "UPDATE");
-      await lockLivePerson(tx, userId, batch.personId);
+      const batch = await lockPersonThenBatch(tx, userId, batchId);
       assertPending(batch);
       await recomputeOverlap(tx, batch);
       const preview = await loadPreview(tx, userId, batchId);
@@ -369,6 +291,8 @@ export function createImports(db: Db, opts: ImportsOptions = {}) {
       }
       const saved = await tx.message.updateMany({ where: { batchId, state: "STAGED" }, data: { state: "CONFIRMED", duplicateOfId: null } });
       await tx.importBatch.update({ where: { id: batchId }, data: { status: "CONFIRMED", confirmedAt: now() } });
+      // 确认是原图的不可逆点（ADR-0003）：立即停止访问，物理文件由清理任务在 24 小时内删除
+      await tx.screenshot.updateMany({ where: { batchId, revokedAt: null }, data: { revokedAt: now() } });
       return { saved: saved.count, merged: merge ? duplicates.length : 0 };
     });
   }
@@ -438,13 +362,28 @@ export function createImports(db: Db, opts: ImportsOptions = {}) {
 
   // ───────── 删除与删除围栏 ─────────
 
-  /** 删除批次：先锁行并递增代际，再连同消息与修订一并删除；依赖它的重叠标记被清除。 */
+  /**
+   * 删除批次：先锁行并递增代际，再连同消息、修订与截图记录一并删除；依赖它的重叠标记被清除。
+   * 删除后退还尚未结算的识别额度，并删除原图文件（文件删除失败不影响删除结果，会由孤儿文件清理补删）。
+   */
   async function deleteBatch(userId: string, batchId: string) {
-    await db.$transaction(async (tx) => {
+    const keys = await db.$transaction(async (tx) => {
       await lockBatch(tx, userId, batchId, "UPDATE");
+      const shots = await tx.screenshot.findMany({ where: { batchId, purgedAt: null }, select: { storageKey: true } });
       await tx.importBatch.update({ where: { id: batchId }, data: { generation: { increment: 1 } } });
       await tx.importBatch.delete({ where: { id: batchId } });
+      return shots.map((x) => x.storageKey);
     });
+    await opts.quota?.releaseOpen(userId, "SCREENSHOT", `rec:${batchId}:`, "批次已删除，退还识别额度");
+    if (opts.storage) {
+      for (const key of keys) {
+        try {
+          await opts.storage.delete(key);
+        } catch {
+          // 留给孤儿文件清理
+        }
+      }
+    }
   }
 
   /** 后台任务写回入口：校验归属、批次仍然存在且代际未变后才执行回调（与删除互斥）。 */

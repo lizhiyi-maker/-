@@ -3,7 +3,8 @@
 import { redirect } from "next/navigation";
 import { isDemoMode } from "@/lib/env";
 import { getServices } from "@/server/container";
-import { AuthError } from "@/server/auth/service";
+import type { AuthError } from "@/server/auth/service";
+import { isDomainError } from "@/server/errors";
 import { normalizePhone } from "@/server/auth/phone";
 import { peekMockCode } from "@/server/sms/mock";
 import { clearSessionCookie, clientIp, SESSION_COOKIE, setSessionCookie } from "@/server/session";
@@ -30,7 +31,7 @@ export async function requestCodeAction(phone: string): Promise<RequestCodeResul
     return {
       ok: false,
       error: toMessage(e),
-      retryAfterSec: e instanceof AuthError && e.retryAfterMs ? Math.ceil(e.retryAfterMs / 1000) : undefined,
+      retryAfterSec: isDomainError(e, "AuthError") && (e as AuthError).retryAfterMs ? Math.ceil((e as AuthError).retryAfterMs! / 1000) : undefined,
     };
   }
 }
@@ -47,7 +48,7 @@ export async function verifyCodeAction(input: { phone: string; code: string; inv
     await setSessionCookie(token);
     return { ok: true };
   } catch (e) {
-    if (e instanceof AuthError && e.code === "INVITE_REQUIRED") return { ok: false, needInvite: true, error: e.message };
+    if (isDomainError(e, "AuthError") && (e as AuthError).code === "INVITE_REQUIRED") return { ok: false, needInvite: true, error: e.message };
     return { ok: false, error: toMessage(e) };
   }
 }

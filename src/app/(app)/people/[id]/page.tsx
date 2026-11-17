@@ -18,7 +18,7 @@ import { FEELING_LABEL, GENDER_LABEL, PLATFORM_LABEL, STAGE_LABEL } from "@/doma
 import { formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { getServices } from "@/server/container";
-import { NotFoundError } from "@/server/people/service";
+import { isNotFound } from "@/server/errors";
 import { requireUser } from "@/server/session";
 
 const TABS = [
@@ -43,7 +43,7 @@ export default async function PersonPage({
   const user = await requireUser();
   const person = await getServices()
     .people.get(user.id, id)
-    .catch((e) => (e instanceof NotFoundError ? null : Promise.reject(e)));
+    .catch((e) => (isNotFound(e) ? null : Promise.reject(e)));
   if (!person) notFound();
 
   const { imports } = getServices();

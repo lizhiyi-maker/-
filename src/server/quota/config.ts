@@ -3,7 +3,11 @@ import raw from "../../../config/quota.json";
 
 const schema = z.object({
   periodDays: z.number().int().positive(),
-  screenshot: z.object({ perPeriod: z.number().int().nonnegative(), perBatch: z.number().int().positive() }),
+  screenshot: z.object({
+    perPeriod: z.number().int().nonnegative(),
+    perBatch: z.number().int().positive(),
+    maxBytes: z.number().int().positive(),
+  }),
   analysis: z.object({ perPeriod: z.number().int().nonnegative() }),
   textPerBatchChars: z.number().int().positive(),
 });

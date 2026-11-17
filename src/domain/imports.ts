@@ -32,6 +32,7 @@ export const TIME_PRECISION_LABEL = {
 export const createBatchSchema = z.object({
   platform: z.enum(["WECHAT", "DOUYIN", "OTHER"]),
   dataKind: z.enum(["CONTINUOUS", "CURATED", "UNCERTAIN"]),
+  sourceKind: z.enum(["TEXT", "SCREENSHOT"]).default("TEXT"),
 });
 
 export const dataKindSchema = z.enum(["CONTINUOUS", "CURATED", "UNCERTAIN"]);

@@ -204,7 +204,30 @@ export function createQuota(db: Db, opts: QuotaOptions = {}) {
     });
   }
 
-  return { getAvailable, getSummary, grant, reserve, settle, release };
+  /**
+   * 退还所有以 taskKeyPrefix 开头、既未结算也未退还的预留（用于批次被删除等任务作废的场景）。
+   * 返回退还的条数。
+   */
+  async function releaseOpen(userId: string, kind: QuotaKind, taskKeyPrefix: string, reason = "任务作废退还") {
+    return db.$transaction(async (tx) => {
+      await lock(tx, userId, kind);
+      const reservations = await tx.quotaEntry.findMany({
+        where: { userId, kind, type: "RESERVE", taskKey: { startsWith: taskKeyPrefix } },
+      });
+      let released = 0;
+      for (const r of reservations) {
+        const closed = await tx.quotaEntry.findFirst({ where: { userId, kind, taskKey: r.taskKey, type: { in: ["SETTLE", "RELEASE"] } } });
+        if (closed) continue;
+        await tx.quotaEntry.create({
+          data: { userId, kind, type: "RELEASE", delta: r.amount, amount: r.amount, taskKey: r.taskKey, periodKey: r.periodKey, reason },
+        });
+        released++;
+      }
+      return released;
+    });
+  }
+
+  return { getAvailable, getSummary, grant, reserve, settle, release, releaseOpen };
 }
 
 export type Quota = ReturnType<typeof createQuota>;

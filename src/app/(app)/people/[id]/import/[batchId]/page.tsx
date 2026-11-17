@@ -15,13 +15,15 @@ import {
 import { ConfirmButton } from "@/components/confirm-button";
 import { ConfirmImportForm } from "@/components/confirm-import-form";
 import { messageTimeText } from "@/components/message-list";
+import { ScreenshotStage, ShotThumb, type ProgressView, type ShotView } from "@/components/screenshot-stage";
 import { Button } from "@/components/ui/button";
 import { Badge, Card, CardTitle } from "@/components/ui/card";
 import { Select, Textarea } from "@/components/ui/form-controls";
 import { DATA_KIND_LABEL, SPEAKER_LABEL } from "@/domain/imports";
 import { PLATFORM_LABEL } from "@/domain/people";
 import { cn } from "@/lib/utils";
-import { NotFoundError } from "@/server/errors";
+import { quotaConfig } from "@/server/quota/config";
+import { isNotFound } from "@/server/errors";
 import { getServices } from "@/server/container";
 import { requireUser } from "@/server/session";
 
@@ -37,11 +39,50 @@ export default async function ImportConfirmPage({
   const user = await requireUser();
   const preview = await getServices()
     .imports.getPreview(user.id, batchId)
-    .catch((e) => (e instanceof NotFoundError ? null : Promise.reject(e)));
+    .catch((e) => (isNotFound(e) ? null : Promise.reject(e)));
   if (!preview || preview.batch.personId !== id) notFound();
   if (preview.batch.status === "CONFIRMED") redirect(`/people/${id}?tab=chats`);
 
   const { batch, labels, messages } = preview;
+
+  // 截图批次：读取服务端保存的上传与识别进度，并为未撤销的原图签发短时链接
+  let shots: ShotView[] = [];
+  let progress: ProgressView | null = null;
+  if (batch.sourceKind === "SCREENSHOT") {
+    const { recognition } = getServices();
+    const [list, p] = await Promise.all([recognition.list(user.id, batchId), recognition.getProgress(user.id, batchId)]);
+    progress = p;
+    shots = await Promise.all(
+      list.map(async (s) => ({
+        id: s.id,
+        idx: s.idx,
+        status: s.status,
+        available: s.available,
+        token: s.available ? await recognition.signedUrl(user.id, s.id) : null,
+      })),
+    );
+  }
+  if (progress && (batch.status === "UPLOADING" || batch.status === "RECOGNIZING")) {
+    const quotaAvailable = await getServices().quota.getAvailable(user.id, "SCREENSHOT");
+    return (
+      <section className="mx-auto max-w-2xl space-y-4">
+        <Link href={`/people/${id}?tab=chats`} className="text-sm text-muted-foreground">
+          ← 返回聊天资料
+        </Link>
+        <div className="flex flex-wrap items-center gap-2">
+          <h1 className="text-xl font-semibold">{batch.status === "UPLOADING" ? "上传聊天截图" : "识别聊天截图"}</h1>
+          <Badge>{PLATFORM_LABEL[batch.platform]}</Badge>
+          <Badge tone="primary">{DATA_KIND_LABEL[batch.dataKind]}</Badge>
+        </div>
+        <ScreenshotStage personId={id} batchId={batchId} shots={shots} progress={progress} quotaAvailable={quotaAvailable} perBatch={quotaConfig.screenshot.perBatch} />
+        <form action={deleteBatchAction.bind(null, id, batchId, "person")}>
+          <ConfirmButton variant="ghost" className="w-full text-red-700" message="放弃这批资料吗？已上传的截图会被删除，已预留的识别额度会退还。">
+            放弃这批资料
+          </ConfirmButton>
+        </form>
+      </section>
+    );
+  }
   const hasRole = labels.some((l) => l.role !== null);
   const prefilledUnconfirmed = labels.every((l) => l.role !== null) && !batch.identityConfirmed;
   const uncertain = messages.filter((m) => m.recognition === "UNCERTAIN");
@@ -66,6 +107,26 @@ export default async function ImportConfirmPage({
           已交换 {swapped} 条消息的“我/对方”。
           {overlapBefore !== undefined && overlapAfter !== undefined && ` 与已保存聊天的重叠由 ${overlapBefore} 条变为 ${overlapAfter} 条。`}
         </p>
+      )}
+
+      {batch.sourceKind === "SCREENSHOT" && (
+        <Card data-testid="originals-card">
+          <CardTitle>原图</CardTitle>
+          <p className="mb-3 text-xs text-muted-foreground">
+            原图只在你确认保存前保留，方便核对。<strong>保存后原图会立即停止访问并被删除，无法重新识别</strong>，之后只能修改文字。
+          </p>
+          <details>
+            <summary className="cursor-pointer text-sm text-primary">查看原图（{shots.length} 张）</summary>
+            <ul className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
+              {shots.map((s) => (
+                <li key={s.id}>
+                  <ShotThumb shot={s} />
+                  <p className="mt-1 text-xs text-muted-foreground">第 {s.idx + 1} 张</p>
+                </li>
+              ))}
+            </ul>
+          </details>
+        </Card>
       )}
 
       <Card>

@@ -1,8 +1,5 @@
 import "server-only";
-import { AuthError } from "@/server/auth/service";
-import { ForbiddenError } from "@/server/admin/service";
-import { NotFoundError, ValidationError } from "@/server/errors";
-import { QuotaError } from "@/server/quota/ledger";
+import { isDomainError } from "@/server/errors";
 
 export interface FormState {
   error?: string;
@@ -11,13 +8,7 @@ export interface FormState {
 
 /** 把领域错误转成可展示的中文消息；未知错误只返回通用提示，不泄露细节。 */
 export function toMessage(e: unknown): string {
-  if (
-    e instanceof AuthError ||
-    e instanceof ValidationError ||
-    e instanceof NotFoundError ||
-    e instanceof ForbiddenError ||
-    e instanceof QuotaError
-  ) {
+  if (isDomainError(e, "AuthError", "ValidationError", "NotFoundError", "ForbiddenError", "QuotaError", "InsufficientQuotaError")) {
     return e.message;
   }
   console.error("[action]", e instanceof Error ? e.name : "unknown");

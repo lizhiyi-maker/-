@@ -16,6 +16,8 @@ const baseSchema = z.object({
   STORAGE_PROVIDER: z.enum(["local", "oss"]).default("local"),
   SMS_PROVIDER: z.enum(["mock", "aliyun"]).default("mock"),
   DEV_LOGIN_ENABLED: flag,
+  // 本地模拟存储（STORAGE_PROVIDER=local）的目录；默认 .data/uploads
+  STORAGE_LOCAL_DIR: z.string().min(1).default(".data/uploads"),
   // 可信反向代理层数；0 表示不信任 X-Forwarded-For（IP 限流退化为单一共享桶）
   TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
   AUTH_SECRET: secret,

@@ -1,11 +1,11 @@
 import { PgBoss } from "pg-boss";
+import { QUEUES } from "./queues";
 import { createDb, type Db } from "@/server/db";
-import { purgeExpired, purgeStaleBatches } from "@/server/maintenance";
+import { purgeExpired, purgeOrphanFiles, purgeRevokedOriginals, purgeStaleBatches } from "@/server/maintenance";
+import type { Recognition, RecognitionJob } from "@/server/recognition/service";
+import type { FileStorage } from "@/server/storage/types";
 
-export const QUEUES = {
-  heartbeat: "system.heartbeat",
-  purgeExpired: "maintenance.purge-expired",
-} as const;
+export { QUEUES };
 
 export interface HeartbeatPayload {
   requestedAt: string;
@@ -19,7 +19,7 @@ export function createBoss(databaseUrl: string): PgBoss {
 export async function startWorker(
   databaseUrl: string,
   onHeartbeat: (p: HeartbeatPayload) => void = () => {},
-  opts: { db?: Db } = {},
+  opts: { db?: Db; recognition?: Recognition; storage?: FileStorage } = {},
 ) {
   const db = opts.db ?? createDb(databaseUrl);
   const boss = createBoss(databaseUrl);
@@ -34,8 +34,27 @@ export async function startWorker(
   await boss.schedule(QUEUES.purgeExpired, "17 * * * *");
   await boss.work(QUEUES.purgeExpired, async () => {
     await purgeExpired(db);
-    await purgeStaleBatches(db);
+    await purgeStaleBatches(db, new Date(), opts.storage);
+    if (opts.storage) {
+      // 确认保存后的原图在 24 小时内物理删除（每小时执行）；顺带清理孤儿文件
+      await purgeRevokedOriginals(db, opts.storage);
+      await purgeOrphanFiles(db, opts.storage);
+    }
   });
+
+  if (opts.recognition) {
+    const recognition = opts.recognition;
+    await boss.createQueue(QUEUES.recognition);
+    await boss.work<RecognitionJob>(QUEUES.recognition, async (jobs) => {
+      for (const job of jobs) await recognition.processScreenshot(job.data);
+    });
+    // 每 5 分钟把卡住的识别任务判为失败并退还额度
+    await boss.createQueue(QUEUES.sweepRecognition);
+    await boss.schedule(QUEUES.sweepRecognition, "*/5 * * * *");
+    await boss.work(QUEUES.sweepRecognition, async () => {
+      await recognition.sweepStuck();
+    });
+  }
   return {
     boss,
     stop: async () => {

@@ -99,3 +99,62 @@ export async function deleteBatchAction(personId: string, batchId: string, redir
   revalidatePath("/");
   redirect(redirectTo === "person" ? `/people/${personId}?tab=chats` : "/");
 }
+
+// ───────── 截图导入 ─────────
+
+/** 创建截图批次，进入上传与识别页（此时不识别、不扣额度）。 */
+export async function createScreenshotBatchAction(personId: string, _prev: FormState, fd: FormData): Promise<FormState> {
+  const user = await requireUser();
+  let batchId: string;
+  try {
+    const batch = await getServices().imports.createBatch(user.id, personId, {
+      platform: str(fd, "platform") as "WECHAT" | "DOUYIN" | "OTHER",
+      dataKind: str(fd, "dataKind") as "CONTINUOUS" | "CURATED" | "UNCERTAIN",
+      sourceKind: "SCREENSHOT",
+    });
+    batchId = batch.id;
+  } catch (e) {
+    return { error: toMessage(e) };
+  }
+  revalidatePath("/");
+  redirect(importUrl(personId, batchId));
+}
+
+export async function startRecognitionAction(personId: string, batchId: string): Promise<FormState> {
+  const user = await requireUser();
+  try {
+    await getServices().recognition.start(user.id, batchId);
+  } catch (e) {
+    return { error: toMessage(e) };
+  }
+  revalidatePath(importUrl(personId, batchId));
+  return { ok: true };
+}
+
+export async function retryFailedAction(personId: string, batchId: string): Promise<FormState> {
+  const user = await requireUser();
+  try {
+    await getServices().recognition.retryFailed(user.id, batchId);
+  } catch (e) {
+    return { error: toMessage(e) };
+  }
+  revalidatePath(importUrl(personId, batchId));
+  return { ok: true };
+}
+
+export async function skipFailedAction(personId: string, batchId: string): Promise<FormState> {
+  const user = await requireUser();
+  try {
+    await getServices().recognition.skipFailed(user.id, batchId);
+  } catch (e) {
+    return { error: toMessage(e) };
+  }
+  revalidatePath(importUrl(personId, batchId));
+  return { ok: true };
+}
+
+export async function removeScreenshotAction(personId: string, batchId: string, screenshotId: string) {
+  const user = await requireUser();
+  await getServices().recognition.removeScreenshot(user.id, screenshotId);
+  revalidatePath(importUrl(personId, batchId));
+}
