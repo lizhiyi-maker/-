@@ -1,0 +1,44 @@
+{
+  "version": "v0-experimental",
+  "status": "experimental",
+  "notice": "实验规则：完成样本评测并经确认前，不得作为有效规则启用，界面须标注“实验规则”。",
+  "dimensions": [
+    { "key": "mutual_investment", "label": "双向投入" },
+    { "key": "willingness_to_know", "label": "了解意愿" },
+    { "key": "follow_through", "label": "行动兑现" },
+    { "key": "communication_boundaries", "label": "沟通与边界" },
+    { "key": "pace_alignment", "label": "意愿与节奏匹配" }
+  ],
+  "levels": [
+    { "key": "very_weak", "label": "明显不适配", "score": 0 },
+    { "key": "weak", "label": "偏弱", "score": 25 },
+    { "key": "fair", "label": "一般", "score": 50 },
+    { "key": "good", "label": "较好", "score": 75 },
+    { "key": "very_good", "label": "很好", "score": 100 }
+  ],
+  "importance": { "min": 1, "max": 5, "default": 3 },
+  "evidence": {
+    "sufficient": { "minUnits": 3, "minDistinctContexts": 2 },
+    "clue": { "minUnits": 1 },
+    "unitWindowMinutes": 30,
+    "curatedOrUncertainCapAtClue": ["mutual_investment"]
+  },
+  "total": {
+    "requiresAllDimensionsKnown": true,
+    "scoreDecimals": 1
+  },
+  "ranking": {
+    "eligibleStages": ["met", "getting_to_know"],
+    "minCommonKnownDimensions": 4,
+    "criticalImportance": 5,
+    "ineligibleFlags": ["explicit_refusal", "stop_contact_requested"],
+    "tiesShareRank": true
+  },
+  "trend": {
+    "minComparableSnapshots": 2,
+    "minDeltaPoints": 8,
+    "maxSnapshots": 3,
+    "requireSameRuleVersion": true,
+    "requireSamePreferenceVersion": true
+  }
+}
