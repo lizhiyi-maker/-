@@ -4,6 +4,7 @@ import { Badge, Card, EmptyState } from "@/components/ui/card";
 import { FRESHNESS_LABEL } from "@/domain/analysis/freshness";
 import { BATCH_STATUS_LABEL } from "@/domain/imports";
 import { FEELING_LABEL, STAGE_LABEL, type GenderFilter } from "@/domain/people";
+import { Avatar } from "@/components/theme/avatar";
 import { cn } from "@/lib/utils";
 import { getServices } from "@/server/container";
 import { requireUser } from "@/server/session";
@@ -96,7 +97,10 @@ export default async function HomePage({ searchParams }: { searchParams: Promise
             <li key={p.id}>
               <Link href={`/people/${p.id}`} className="block rounded-lg border bg-card p-4 transition-colors hover:bg-muted/50">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="truncate text-base font-medium">{p.nickname}</span>
+                  <span className="flex min-w-0 items-center gap-3">
+                    <Avatar name={p.nickname} />
+                    <span className="truncate text-base font-medium">{p.nickname}</span>
+                  </span>
                   <Badge tone={p.stage ? "primary" : "muted"}>{p.stage ? STAGE_LABEL[p.stage] : "阶段未设置"}</Badge>
                 </div>
                 <p className="mt-2 text-sm text-muted-foreground">

@@ -1,4 +1,5 @@
 import * as React from "react";
+import { Mascot } from "@/components/theme/mascot";
 import { cn } from "@/lib/utils";
 
 export function Card({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
@@ -21,6 +22,9 @@ export function Badge({ className, tone = "muted", ...props }: React.HTMLAttribu
 export function EmptyState({ title, children }: { title: string; children?: React.ReactNode }) {
   return (
     <div className="rounded-lg border border-dashed bg-card p-6 text-center">
+      <div className="mb-2 flex justify-center">
+        <Mascot size={64} mood="sleepy" />
+      </div>
       <p className="text-sm font-medium">{title}</p>
       {children && <div className="mt-1 text-sm text-muted-foreground">{children}</div>}
     </div>
