@@ -10,6 +10,7 @@ import type { AnalysisModel } from "@/server/ai/analysis-model";
 import { computeFreshness, type Freshness } from "@/domain/analysis/freshness";
 import { evidenceKey, isEventRef, type AnalysisOutput, type EvidenceRef } from "@/domain/analysis/output";
 import type { EventKind } from "@/domain/events";
+import { computeFitScore, type FitScore, type Importance } from "@/domain/scoring/score";
 import { RULES_VERSION } from "@/domain/analysis/rules";
 import type { DataKind } from "@/domain/analysis/evidence";
 import type { MessageType, Speaker, TimePrecision } from "@/domain/chat/types";
@@ -66,6 +67,10 @@ export interface ReportView {
   promptVersion: string;
   modelId: string;
   preferenceVersion: number;
+  /** 这份报告分析时使用的维度重要程度（取自快照里的偏好） */
+  importance: Importance;
+  /** 适配分：按规则版本与上面的重要程度，由已保存的分析结果纯函数算出；未五维全已知时没有分数 */
+  fit: FitScore;
   output: AnalysisOutput;
   verification: Record<string, DimensionVerification>;
   warnings: string[];
@@ -89,6 +94,9 @@ export interface EvidenceEntry {
   before: { speaker: Speaker; content: string } | null;
   after: { speaker: Speaker; content: string } | null;
 }
+
+/** 快照里记录的维度重要程度；缺失时由评分函数补默认值。 */
+const savedImportance = (preferenceValues: unknown): Importance => ((preferenceValues as { importance?: Importance } | null)?.importance ?? {}) as Importance;
 
 const STUCK_AFTER_MS = 15 * 60_000;
 const CHUNK = 500;
@@ -410,6 +418,8 @@ export function createAnalysis(db: Db, deps: AnalysisDeps) {
       promptVersion: latest.promptVersion,
       modelId: latest.modelId,
       preferenceVersion: latest.preferenceVersion,
+      importance: savedImportance(latest.preferenceValues),
+      fit: computeFitScore((latest.output as unknown as AnalysisOutput).dimensions, savedImportance(latest.preferenceValues)),
       output: latest.output as unknown as AnalysisOutput,
       verification: meta.verification ?? {},
       warnings: meta.warnings ?? [],
@@ -513,9 +523,12 @@ export function createAnalysis(db: Db, deps: AnalysisDeps) {
     const rows = await db.analysis.findMany({
       where: { userId, personId, status: "SUCCEEDED" },
       orderBy: [{ snapshotAt: "asc" }, { id: "asc" }],
-      select: { id: true, snapshotAt: true, messageCount: true, eventCount: true, rulesVersion: true, preferenceVersion: true, output: true },
+      select: { id: true, snapshotAt: true, messageCount: true, eventCount: true, rulesVersion: true, preferenceVersion: true, preferenceValues: true, output: true },
     });
-    return rows.map(({ output, ...r }) => ({ ...r, summary: (output as unknown as AnalysisOutput | null)?.conclusion.summary ?? "" }));
+    return rows.map(({ output, preferenceValues, ...r }) => {
+      const out = output as unknown as AnalysisOutput;
+      return { ...r, summary: out?.conclusion.summary ?? "", fit: computeFitScore(out.dimensions, savedImportance(preferenceValues)) };
+    });
   }
 
   /** 首页待办：有已保存资料、没有进行中的分析，但从未分析或报告已不是“最新”的对象。 */

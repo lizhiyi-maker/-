@@ -28,7 +28,7 @@
     "scoreDecimals": 1
   },
   "ranking": {
-    "eligibleStages": ["met", "getting_to_know"],
+    "eligibleStages": ["JUST_MET", "GETTING_TO_KNOW"],
     "minCommonKnownDimensions": 4,
     "criticalImportance": 5,
     "ineligibleFlags": ["explicit_refusal", "stop_contact_requested"],

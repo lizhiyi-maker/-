@@ -1,4 +1,5 @@
 import { Badge, Card, CardTitle } from "@/components/ui/card";
+import { FitScoreCard } from "@/components/fit-score";
 import { messageTimeText } from "@/components/message-list";
 import { FRESHNESS_LABEL, type Freshness } from "@/domain/analysis/freshness";
 import { evidenceKey, type EvidenceRef, type ResolvedDimension, type SuggestionKind } from "@/domain/analysis/output";
@@ -187,12 +188,14 @@ export function AnalysisReport({ report, evidence, freshness }: { report: Report
       <section aria-label="五维分析" className="space-y-3">
         <h2 className="text-sm font-semibold">五维分析</h2>
         <p className="text-xs text-muted-foreground">
-          这里展示每个维度的状态与等级建议和证据；具体分数在后续版本提供。信息充分度只描述资料覆盖与证据的限制，不是概率，也不预测结果。
+          这里展示每个维度的状态、等级建议和证据；适配分在下方“适配分”里（五个维度都已知时才有）。信息充分度只描述资料覆盖与证据的限制，不是概率，也不预测结果。
         </p>
         {DIMENSION_KEYS.map((k) => (
           <Dimension key={k} k={k} d={output.dimensions[k]} verification={report.verification[k]} evidence={evidence} />
         ))}
       </section>
+
+      <FitScoreCard fit={report.fit} dimensions={output.dimensions} importance={report.importance} />
 
       <section aria-label="行动建议" className="space-y-3">
         <h2 className="text-sm font-semibold">行动建议（最多 3 条）</h2>

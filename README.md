@@ -49,7 +49,7 @@ npm run eval:analysis   # 分析流水线安全评测（模拟模型），写入
 | `src/worker` | pg-boss 独立 worker 进程（其内部表在 `pgboss` schema，由 pg-boss 自己迁移，不入 Prisma） |
 | `prisma/` | 业务数据模型与迁移 |
 | `src/server/` | 服务层：auth、people、events（线下事件）、preferences、quota、imports、analysis、admin（均以 userId 限定范围） |
-| `src/domain/` | 与框架无关的领域定义（标签、校验） |
+| `src/domain/` | 与框架无关的领域定义（标签、校验、`scoring/` 评分/排名/趋势纯函数、`timeline.ts`） |
 | `config/scoring/` | 评分规则配置（唯一数值来源，实验规则） |
 | `docs/` | 方案、业务规范、评分规则、ADR |
 | `tests/` | `unit`、`integration`、`e2e` |

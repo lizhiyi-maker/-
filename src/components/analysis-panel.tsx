@@ -4,18 +4,20 @@ import { ActionButton } from "@/components/action-button";
 import { AnalysisReport, FreshnessBanner } from "@/components/analysis-report";
 import { AutoRefresh } from "@/components/auto-refresh";
 import { ConsentCard } from "@/components/consent-card";
+import { TrendCard } from "@/components/fit-score";
 import { Card, CardTitle, EmptyState } from "@/components/ui/card";
 import { getServices } from "@/server/container";
 
 /** 对象详情“分析与建议”：同意 → 开始分析 → 进度 → 报告。新增资料不会自动分析，由用户决定何时（重新）分析。 */
 export async function AnalysisPanel({ userId, personId }: { userId: string; personId: string }) {
-  const { analysis, consent, provider, db } = getServices();
+  const { analysis, compare, consent, provider, db } = getServices();
   const [report, consentStatus, confirmedCount] = await Promise.all([
     analysis.getReport(userId, personId),
     consent.status(userId),
     db.message.count({ where: { userId, personId, state: "CONFIRMED" } }),
   ]);
   const evidence = report.latest ? await analysis.loadEvidence(userId, report.latest.id) : {};
+  const trend = report.latest ? (await compare.trend(userId, personId)).trend : null;
 
   const starter = !consentStatus.accepted ? (
     <ConsentCard provider={provider} action="关系分析" />
@@ -45,7 +47,10 @@ export async function AnalysisPanel({ userId, personId }: { userId: string; pers
         </Card>
       )}
       {report.latest && report.freshness ? (
-        <AnalysisReport report={report.latest} evidence={evidence} freshness={report.freshness} />
+        <>
+          <AnalysisReport report={report.latest} evidence={evidence} freshness={report.freshness} />
+          {trend && <TrendCard trend={trend} />}
+        </>
       ) : (
         report.freshness && <FreshnessBanner freshness={report.freshness} />
       )}

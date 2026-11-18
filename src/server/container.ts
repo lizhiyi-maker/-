@@ -9,6 +9,7 @@ import type { VisionModel } from "@/server/ai/vision";
 import { createAdmin } from "@/server/admin/service";
 import { createAnalysis } from "@/server/analysis/service";
 import { createAuth } from "@/server/auth/service";
+import { createCompare } from "@/server/compare/service";
 import { createConsent } from "@/server/consent/service";
 import { createEvents } from "@/server/events/service";
 import { providerInfo } from "@/domain/consent";
@@ -61,6 +62,13 @@ function build() {
   const provider = providerInfo(env.AI_PROVIDER);
   const consent = createConsent(db, { providerId: provider.id });
   const preferences = createPreferences(db);
+  const analysis = createAnalysis(db, {
+    quota,
+    consent,
+    preferences,
+    model: buildAnalysisModel(env),
+    queue: { enqueue: (job) => queue.enqueueAnalysis(job) },
+  });
   return {
     env,
     db,
@@ -73,13 +81,8 @@ function build() {
     people: createPeople(db, { quota }),
     imports: createImports(db, { storage, quota }),
     recognition: createRecognition(db, { storage, quota, consent, vision: buildVision(env), queue }),
-    analysis: createAnalysis(db, {
-      quota,
-      consent,
-      preferences,
-      model: buildAnalysisModel(env),
-      queue: { enqueue: (job) => queue.enqueueAnalysis(job) },
-    }),
+    analysis,
+    compare: createCompare(db, { analysis, preferences }),
     preferences,
     quota,
     admin: createAdmin(db, { keys }),

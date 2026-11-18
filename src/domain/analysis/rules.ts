@@ -13,6 +13,22 @@ const schema = z.object({
     unitWindowMinutes: z.number().positive(),
     curatedOrUncertainCapAtClue: z.array(z.string()),
   }),
+  total: z.object({ requiresAllDimensionsKnown: z.boolean(), scoreDecimals: z.number().int().min(0).max(3) }),
+  ranking: z.object({
+    /** 阶段键与对象档案里的阶段枚举一致（JUST_MET / GETTING_TO_KNOW …） */
+    eligibleStages: z.array(z.enum(["JUST_MET", "GETTING_TO_KNOW", "IN_RELATIONSHIP", "ENDED"])),
+    minCommonKnownDimensions: z.number().int().positive(),
+    criticalImportance: z.number().int(),
+    ineligibleFlags: z.array(z.string()),
+    tiesShareRank: z.boolean(),
+  }),
+  trend: z.object({
+    minComparableSnapshots: z.number().int().min(2),
+    minDeltaPoints: z.number().positive(),
+    maxSnapshots: z.number().int().min(2),
+    requireSameRuleVersion: z.boolean(),
+    requireSamePreferenceVersion: z.boolean(),
+  }),
 });
 
 export type ScoringRules = z.infer<typeof schema>;
