@@ -1,6 +1,6 @@
 # 交接记录（新对话从这里开始）
 
-> 更新于 2026-11-18，M5b 完成待用户提交时。新对话先读本文件，再读 `README.md`、`GLOSSARY.md`、`docs/verification-matrix.md`。
+> 更新于 2026-11-18，M5c 完成待用户提交时。新对话先读本文件，再读 `README.md`、`GLOSSARY.md`、`docs/verification-matrix.md`。
 
 ## 1. 进度
 
@@ -14,9 +14,13 @@
 | M3a | AI 服务同意关卡、分析流水线、引用校验、快照与新鲜度、报告页、安全评测 | ✅ fecb120 |
 | M3b | 线下事件、好感变化、时间线与复盘 | ✅ 80fd598 |
 | M4 | 纯函数评分、对比/排名/待了解/趋势、报告适配分与趋势卡片 | ✅ 9f69c03 |
-| M5a | 数据导出 + 账户删除全流程（隐私功能） | ✅ 本次提交 |
-| M5b | 后台任务状态、成本、用户反馈 | ✅ 本次提交 |
-| **M5c** | **Dockerfile、部署与备案文档、手机端/微信验收清单、最终 AI 评测报告、剩余限制清单；规则转 active 须经用户确认（下一步）** | ⏳ 未开始 |
+| M5a | 数据导出 + 账户删除全流程（隐私功能） | ✅ e3024d7 |
+| M5b | 后台任务状态、成本、用户反馈 | ✅ 5db3266 |
+| M5c | Dockerfile、部署与备案文档、手机端/微信验收清单、最终 AI 评测报告、剩余限制清单（规则保持 experimental） | ✅ 本次提交 |
+
+**MVP 的开发范围到此全部完成。** 剩下的不是写功能，而是：真实服务适配器（AI/短信/OSS）、真实模型评测、合规核实与备案、真机验收——见 [docs/limitations.md](./limitations.md) 的 A 组（上线阻断）。下一步由用户决定先做哪一块。
+
+M5c 取舍（用户确认）：评分规则保持 `experimental`；Dockerfile 一个镜像两个启动命令；代码只加“配置漂移守卫”单测（`ENV_KEYS` 导出自 `src/lib/env.ts`），**没有**加健康检查端点测试与评测覆盖对照检查。M5c 的新发现：生产模式 + 真实提供方变量下应用能启动、`/api/health` 200，但页面 500（适配器未实现）——健康检查不代表可用；移除了 `next.config.ts` 的 `output: "standalone"`（镜像用 `next start`，该配置会让 `next start` 报警告）。交付物：`Dockerfile`、`.dockerignore`、`docs/deploy/README.md`、`docs/deploy/icp-and-compliance.md`、`docs/acceptance/mobile-wechat-checklist.md`、`docs/evals/final-ai-eval-report.md`、`docs/limitations.md`。**Dockerfile 没有在真实 Docker 构建过；备案/合规内容全部“待核实”，不是法律意见。**
 
 M5 拆分经用户确认（2026-11-18）：三块，每块完成后停下。M5a 的取舍（用户确认）：账户删除=立即停用+立即删除在线数据；导出=JSON + 每个对象的聊天文本；测试接缝=导出服务集成、聊天文本纯函数、账户删除服务集成、Playwright 三种视口。
 

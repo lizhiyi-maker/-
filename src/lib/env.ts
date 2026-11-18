@@ -32,7 +32,10 @@ const baseSchema = z.object({
   SMS_TEMPLATE_CODE: z.string().optional(),
 });
 
-const PLACEHOLDER = /dev-only|change-me|example|placeholder/i;
+/** 代码认识的全部环境变量名（供配置漂移守卫测试对照 .env.example 与部署文档）。 */
+export const ENV_KEYS = Object.keys(baseSchema.shape);
+
+const PLACEHOLDER =/dev-only|change-me|example|placeholder/i;
 
 export const envSchema = baseSchema.superRefine((env, ctx) => {
   const fail = (path: string, message: string) =>

@@ -41,6 +41,10 @@ npm run eval:analysis   # 分析流水线安全评测（模拟模型），写入
 - 未声明 `APP_MODE` 时默认按生产处理。
 - **IP 限流依赖可信代理**：`TRUSTED_PROXY_HOPS=0`（默认）时不信任 `X-Forwarded-For`，所有请求共用一个 IP 限流桶；生产环境必须部署在会追加真实客户端 IP 的反向代理/负载均衡之后，并填写代理层数。
 
+## 部署
+
+见 [docs/deploy/README.md](docs/deploy/README.md)（Dockerfile 用法、环境变量、上线前检查清单）与 [备案与合规核实清单](docs/deploy/icp-and-compliance.md)。**当前还不能上线**：真实 AI/短信/OSS 适配器未写，生产模式下应用不可用；完整限制见 [docs/limitations.md](docs/limitations.md)。真机验收清单：[docs/acceptance/mobile-wechat-checklist.md](docs/acceptance/mobile-wechat-checklist.md)。
+
 ## 目录
 
 | 路径 | 说明 |
