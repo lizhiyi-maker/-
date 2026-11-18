@@ -201,9 +201,14 @@ export default async function PersonPage({
 
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold">聊天资料</h2>
-            <Link href={`/people/${id}/import/new`} className="inline-flex h-9 items-center rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground">
-              导入聊天资料
-            </Link>
+            <div className="flex items-center gap-2">
+              <a href={`/api/export/people/${id}/chat`} download className="inline-flex h-9 items-center rounded-md border bg-card px-3 text-sm" data-testid="export-chat-link">
+                下载聊天文本
+              </a>
+              <Link href={`/people/${id}/import/new`} className="inline-flex h-9 items-center rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground">
+                导入聊天资料
+              </Link>
+            </div>
           </div>
 
           {chats.pending.length > 0 && (

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
 import { logoutAction } from "@/app/actions/auth";
+import { DeleteAccountForm } from "@/components/delete-account-form";
 import { Button } from "@/components/ui/button";
 import { Card, CardTitle } from "@/components/ui/card";
 import { formatDate } from "@/lib/format";
@@ -63,11 +64,31 @@ export default async function MePage() {
         </Link>
       )}
 
+      <Card data-testid="data-card">
+        <CardTitle>我的数据</CardTitle>
+        <p className="mb-3 text-xs text-muted-foreground">
+          下载你保存在这里的全部结构化资料（对象、聊天消息及修订、线下事件、分析报告、偏好、额度记录），格式为 JSON。不包含手机号、登录凭证和已清理的截图原图。
+        </p>
+        <a href="/api/export" download className="inline-flex h-10 items-center rounded-md border bg-card px-4 text-sm font-medium" data-testid="export-link">
+          下载我的全部资料（JSON）
+        </a>
+        <p className="mt-2 text-xs text-muted-foreground">单个对象的可读聊天文本，可在该对象的“聊天资料”页下载。</p>
+      </Card>
+
       <form action={logoutAction}>
         <Button type="submit" variant="outline" className="w-full">
           退出登录
         </Button>
       </form>
+
+      <Card className="border-red-200" data-testid="delete-account-card">
+        <CardTitle>删除账户</CardTitle>
+        <p className="mb-2 text-sm">删除后会<strong>立即退出登录并停用账户</strong>，并删除你在本产品里的全部在线数据：对象、聊天消息与修订、线下事件、分析报告、偏好、额度记录和上传的截图文件。<strong>无法恢复</strong>，建议先下载上面的数据。</p>
+        <p className="mb-3 text-xs text-muted-foreground">
+          这只涉及我们自己系统里的在线数据。系统备份、对象存储的历史版本，以及 AI 服务商那一侧的留存条件我们尚未核实，不对它们的删除作任何承诺。
+        </p>
+        <DeleteAccountForm />
+      </Card>
     </section>
   );
 }

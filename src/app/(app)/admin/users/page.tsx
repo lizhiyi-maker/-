@@ -21,13 +21,13 @@ export default async function AdminUsersPage() {
                   {u.role === "ADMIN" ? "管理员" : "用户"}
                 </Badge>
                 <Badge className="ml-1" tone={u.status === "ACTIVE" ? "muted" : "warn"}>
-                  {u.status === "ACTIVE" ? "正常" : "已停用"}
+                  {u.status === "ACTIVE" ? "正常" : u.status === "DELETING" ? "删除中" : "已停用"}
                 </Badge>
                 <p className="mt-1 text-xs text-muted-foreground">
                   注册 {formatDateTime(u.createdAt)} · 最近登录 {u.lastLoginAt ? formatDateTime(u.lastLoginAt) : "—"}
                 </p>
               </div>
-              {u.id !== admin.id && (
+              {u.id !== admin.id && u.status !== "DELETING" && (
                 <form action={setUserStatusAction.bind(null, u.id, u.status === "ACTIVE" ? "SUSPENDED" : "ACTIVE")}>
                   <Button type="submit" size="sm" variant="outline">
                     {u.status === "ACTIVE" ? "停用" : "恢复"}

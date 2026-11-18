@@ -1,6 +1,6 @@
 import { randomInt } from "node:crypto";
 import type { Db } from "@/server/db";
-import type { QuotaKind, UserStatus } from "@/generated/prisma/enums";
+import type { QuotaKind } from "@/generated/prisma/enums";
 import { NotFoundError, ValidationError } from "@/server/errors";
 import { createQuota } from "@/server/quota/ledger";
 import { decryptPhone, maskPhone } from "@/server/auth/phone";
@@ -68,12 +68,16 @@ export function createAdmin(db: Db, deps: { keys: { encKey: string }; now?: () =
     });
   }
 
-  async function setUserStatus(actorId: string, userId: string, status: UserStatus) {
+  async function setUserStatus(actorId: string, userId: string, status: "ACTIVE" | "SUSPENDED") {
     await assertAdmin(actorId);
     if (actorId === userId) throw new ValidationError("不能修改自己的状态");
     await db.$transaction(async (tx) => {
-      const r = await tx.user.updateMany({ where: { id: userId }, data: { status } });
-      if (r.count === 0) throw new NotFoundError("用户");
+      // 用户发起了账户删除：不能被恢复或改状态，删除流程会完成它
+      const r = await tx.user.updateMany({ where: { id: userId, status: { not: "DELETING" } }, data: { status } });
+      if (r.count === 0) {
+        if (await tx.user.findUnique({ where: { id: userId }, select: { id: true } })) throw new ValidationError("该用户正在删除账户，不能修改状态");
+        throw new NotFoundError("用户");
+      }
       if (status === "SUSPENDED") await tx.session.deleteMany({ where: { userId } });
       await audit(tx, actorId, status === "SUSPENDED" ? "user.suspend" : "user.activate", "User", userId);
     });

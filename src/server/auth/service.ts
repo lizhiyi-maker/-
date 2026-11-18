@@ -138,6 +138,7 @@ export function createAuth(db: Db, deps: AuthDeps) {
 
       const existing = await tx.user.findUnique({ where: { phoneHash } });
       if (existing) {
+        if (existing.status === "DELETING") throw new AuthError("ACCOUNT_SUSPENDED", "账户正在删除中，无法登录");
         if (existing.status !== "ACTIVE") throw new AuthError("ACCOUNT_SUSPENDED", "账号已被停用，请联系管理员");
         await tx.loginCode.update({ where: { id: row.id }, data: { consumedAt: t } });
         await tx.user.update({ where: { id: existing.id }, data: { lastLoginAt: t } });

@@ -18,6 +18,8 @@ enum UserRole {
 enum UserStatus {
   ACTIVE
   SUSPENDED
+  /// 用户已发起账户删除：立即停用、不能登录，在线数据由删除流程（或 worker 的清扫任务）清理
+  DELETING
 }
 
 model User {

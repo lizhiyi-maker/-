@@ -5,4 +5,5 @@ export const QUEUES = {
   recognition: "recognition.screenshot",
   analysis: "analysis.run",
   sweepAnalysis: "maintenance.sweep-analysis",
+  sweepDeleting: "maintenance.sweep-deleting",
 } as const;

@@ -6,12 +6,14 @@ import type { AnalysisModel } from "@/server/ai/analysis-model";
 import { createMockAnalysisModel } from "@/server/ai/mock-analysis";
 import { createMockVision } from "@/server/ai/mock-vision";
 import type { VisionModel } from "@/server/ai/vision";
+import { createAccount } from "@/server/account/service";
 import { createAdmin } from "@/server/admin/service";
 import { createAnalysis } from "@/server/analysis/service";
 import { createAuth } from "@/server/auth/service";
 import { createCompare } from "@/server/compare/service";
 import { createConsent } from "@/server/consent/service";
 import { createEvents } from "@/server/events/service";
+import { createExport } from "@/server/export/service";
 import { providerInfo } from "@/domain/consent";
 import { createImports } from "@/server/imports/service";
 import { createPeople } from "@/server/people/service";
@@ -78,6 +80,8 @@ function build() {
     provider,
     consent,
     events: createEvents(db),
+    exporter: createExport(db),
+    account: createAccount(db, { storage }),
     people: createPeople(db, { quota }),
     imports: createImports(db, { storage, quota }),
     recognition: createRecognition(db, { storage, quota, consent, vision: buildVision(env), queue }),

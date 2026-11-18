@@ -2,6 +2,7 @@ import { PgBoss } from "pg-boss";
 import { QUEUES } from "./queues";
 import { createDb, type Db } from "@/server/db";
 import { purgeExpired, purgeOrphanFiles, purgeRevokedOriginals, purgeStaleBatches } from "@/server/maintenance";
+import type { Account } from "@/server/account/service";
 import type { AnalysisJob, AnalysisService } from "@/server/analysis/service";
 import type { Recognition, RecognitionJob } from "@/server/recognition/service";
 import type { FileStorage } from "@/server/storage/types";
@@ -20,7 +21,7 @@ export function createBoss(databaseUrl: string): PgBoss {
 export async function startWorker(
   databaseUrl: string,
   onHeartbeat: (p: HeartbeatPayload) => void = () => {},
-  opts: { db?: Db; recognition?: Recognition; analysis?: AnalysisService; storage?: FileStorage } = {},
+  opts: { db?: Db; recognition?: Recognition; analysis?: AnalysisService; storage?: FileStorage; account?: Account } = {},
 ) {
   const db = opts.db ?? createDb(databaseUrl);
   const boss = createBoss(databaseUrl);
@@ -67,6 +68,15 @@ export async function startWorker(
     await boss.schedule(QUEUES.sweepAnalysis, "*/5 * * * *");
     await boss.work(QUEUES.sweepAnalysis, async () => {
       await analysis.sweepStuck();
+    });
+  }
+  if (opts.account) {
+    const account = opts.account;
+    // 每 5 分钟继续完成因故中断的账户删除（用户已被停用，在线数据 24 小时内清理）
+    await boss.createQueue(QUEUES.sweepDeleting);
+    await boss.schedule(QUEUES.sweepDeleting, "*/5 * * * *");
+    await boss.work(QUEUES.sweepDeleting, async () => {
+      await account.sweepDeleting();
     });
   }
   return {
