@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createMockAnalysisModel } from "@/server/ai/mock-analysis";
-import { runEvalCases, type EvalCase } from "@/server/analysis/eval";
+import { renderEvalReport, runEvalCases, type EvalCase } from "@/server/analysis/eval";
 
 const { cases } = JSON.parse(readFileSync(join(process.cwd(), "samples", "eval", "analysis-cases.json"), "utf8")) as { cases: EvalCase[] };
 
@@ -34,5 +34,19 @@ describe("分析流水线安全评测（模拟模型）", async () => {
     };
     const bad = await runEvalCases(cases, broken);
     expect(bad.find((r) => r.id === "injection")?.passed).toBe(false);
+  });
+
+  it("评测报告如实标注模型性质：模拟模型写“不代表真实模型”；真实模型不能带着模拟的说明，且提示单次运行有随机性", async () => {
+    const mock = createMockAnalysisModel();
+    const mockReport = renderEvalReport(results, mock, "2026-11-18");
+    expect(mockReport).toContain("模拟模型");
+    expect(mockReport).toContain("不代表任何真实模型的质量");
+
+    const real = renderEvalReport(results, { id: "bailian:x", promptVersion: "p1" }, "2026-11-18");
+    expect(real).toContain("真实模型");
+    expect(real).toContain("bailian:x");
+    expect(real).not.toContain("规则型模拟模型");
+    expect(real).not.toContain("不代表任何真实模型的质量");
+    expect(real).toContain("单次运行");
   });
 });

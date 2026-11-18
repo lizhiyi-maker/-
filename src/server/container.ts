@@ -1,9 +1,5 @@
-import { getEnv, type Env } from "@/lib/env";
+import { getEnv } from "@/lib/env";
 import { getDb } from "@/server/db";
-import type { AnalysisModel } from "@/server/ai/analysis-model";
-import { createMockAnalysisModel } from "@/server/ai/mock-analysis";
-import { createMockVision } from "@/server/ai/mock-vision";
-import type { VisionModel } from "@/server/ai/vision";
 import { createAccount } from "@/server/account/service";
 import { createAdmin } from "@/server/admin/service";
 import { createAnalysis } from "@/server/analysis/service";
@@ -17,21 +13,11 @@ import { providerInfo } from "@/domain/consent";
 import { createImports } from "@/server/imports/service";
 import { createPeople } from "@/server/people/service";
 import { createPreferences } from "@/server/preferences/service";
-import { buildSms, buildStorage } from "@/server/providers";
+import { buildAnalysisModel, buildSms, buildStorage, buildVision } from "@/server/providers";
 import { createPgBossQueue } from "@/server/queue";
 import { createQuota } from "@/server/quota/ledger";
 import { createRecognition } from "@/server/recognition/service";
 import { createUsage } from "@/server/usage/service";
-
-function buildVision(env: Env): VisionModel {
-  if (env.AI_PROVIDER === "mock") return createMockVision();
-  throw new Error(`AI 提供方 ${env.AI_PROVIDER} 尚未实现`);
-}
-
-function buildAnalysisModel(env: Env): AnalysisModel {
-  if (env.AI_PROVIDER === "mock") return createMockAnalysisModel();
-  throw new Error(`AI 提供方 ${env.AI_PROVIDER} 尚未实现`);
-}
 
 function build() {
   const env = getEnv();

@@ -43,7 +43,7 @@ npm run eval:analysis   # 分析流水线安全评测（模拟模型），写入
 
 ## 部署
 
-见 [docs/deploy/README.md](docs/deploy/README.md)（Dockerfile 用法、环境变量、上线前检查清单）与 [备案与合规核实清单](docs/deploy/icp-and-compliance.md)。**当前还不能上线**：短信/OSS 适配器已写但未对真实服务联调，百炼 AI 适配器未写，生产模式下 AI 功能不可用；完整限制见 [docs/limitations.md](docs/limitations.md)。真机验收清单：[docs/acceptance/mobile-wechat-checklist.md](docs/acceptance/mobile-wechat-checklist.md)。
+见 [docs/deploy/README.md](docs/deploy/README.md)（Dockerfile 用法、环境变量、上线前检查清单）与 [备案与合规核实清单](docs/deploy/icp-and-compliance.md)。**当前还不能上线**：短信/OSS 适配器已写但未对真实服务联调，百炼 AI 适配器（M6b）已写但未联调、提示词未评测；完整限制见 [docs/limitations.md](docs/limitations.md)。真机验收清单：[docs/acceptance/mobile-wechat-checklist.md](docs/acceptance/mobile-wechat-checklist.md)。
 
 ## 目录
 

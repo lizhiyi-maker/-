@@ -1,6 +1,11 @@
 import { resolve } from "node:path";
 import { createHmac } from "node:crypto";
 import type { Env } from "@/lib/env";
+import type { AnalysisModel } from "@/server/ai/analysis-model";
+import { createBailianAnalysisModel, createBailianVision, type BailianOptions } from "@/server/ai/bailian";
+import { createMockAnalysisModel } from "@/server/ai/mock-analysis";
+import { createMockVision } from "@/server/ai/mock-vision";
+import type { VisionModel } from "@/server/ai/vision";
 import { createAliyunSms, createAliyunSmsApi } from "@/server/sms/aliyun";
 import { mockSms } from "@/server/sms/mock";
 import type { SmsSender } from "@/server/sms/types";
@@ -39,4 +44,21 @@ export function buildStorage(env: Env): FileStorage {
     }),
     secret,
   });
+}
+
+function bailianOptions(env: Env): BailianOptions {
+  return {
+    apiKey: env.DASHSCOPE_API_KEY!,
+    textModel: env.DASHSCOPE_TEXT_MODEL!,
+    visionModel: env.DASHSCOPE_VISION_MODEL!,
+    baseUrl: env.DASHSCOPE_BASE_URL,
+  };
+}
+
+export function buildVision(env: Env): VisionModel {
+  return env.AI_PROVIDER === "mock" ? createMockVision() : createBailianVision(bailianOptions(env));
+}
+
+export function buildAnalysisModel(env: Env): AnalysisModel {
+  return env.AI_PROVIDER === "mock" ? createMockAnalysisModel() : createBailianAnalysisModel(bailianOptions(env));
 }

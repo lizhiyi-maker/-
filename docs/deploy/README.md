@@ -1,13 +1,13 @@
 # 部署指南
 
-> **当前状态（M6a，2026-11-18）：还不能上线。** 阿里云短信与 OSS 适配器已写（用假服务测试，**没有对真实服务联调**）；**百炼 AI 适配器还没写**，生产模式要求真实 AI，所以今天的代码在生产模式下仍不能提供服务（见 §1）。本文把已验证的部分、没验证的部分和上线前必须做的事分开写。
+> **当前状态（M6a，2026-11-18）：还不能上线。** 阿里云短信与 OSS 适配器已写（用假服务测试，**没有对真实服务联调**）；百炼 AI 适配器也已写（M6b，假 fetch 测试，**未对真实模型联调、未评测**）。所以代码层面生产配置可以装配，但在真实服务上跑通之前不能上线（见 §1）。本文把已验证的部分、没验证的部分和上线前必须做的事分开写。
 > 图例同 [验证矩阵](../verification-matrix.md)：✅ 本机真实运行验证 ｜ 🧪 仅模拟 ｜ ⏳ 需要真实环境/真机。
 > 合规与备案见 [icp-and-compliance.md](./icp-and-compliance.md)；剩余限制见 [../limitations.md](../limitations.md)。
 
 ## 1. 先看这三个事实
 
 1. **生产模式的启动保护（✅）**：`NODE_ENV=production` 且 `APP_MODE=demo` 时 Web 与 worker 拒绝启动；`APP_MODE=production` 时模拟 AI/短信/存储、开发登录、示例或不足 32 字符的密钥都会被拒绝（`src/lib/env.ts`，单元测试 12 项）。
-2. **真实适配器的状态（⏳）**：短信（`src/server/sms/aliyun.ts`）与 OSS（`src/server/storage/oss.ts`）适配器已写，单测与“真实官方 SDK 对本地假服务”的接线测试通过，**但没有对真实阿里云验证过**；百炼适配器（`AI_PROVIDER=bailian`）还没写，`src/server/container.ts` 在第一次使用 AI 时抛“尚未实现”。M5c 实测（当时短信/OSS 也未写）：按生产模式、全部真实提供方、完整环境变量启动，`GET /api/health` 返回 200，而页面返回 500。**所以健康检查通过不代表应用可用**；这是已知限制，没有改成启动即失败（那是行为变更，需要你确认）。
+2. **真实适配器的状态（⏳）**：短信（`src/server/sms/aliyun.ts`）、OSS（`src/server/storage/oss.ts`）、百炼（`src/server/ai/bailian.ts`）适配器都已写，单测通过（短信与 OSS 另有“真实官方 SDK 对本地假服务”的接线测试），**但全部没有对真实服务联调过，百炼的提示词也没有评测过**。`container.ts` 现在不再抛“尚未实现”。M5c 实测（当时三个适配器都没写）：按生产模式、全部真实提供方、完整环境变量启动，`GET /api/health` 返回 200，而页面返回 500。**所以健康检查通过不代表应用可用**；适配器已写之后，装配或凭据错误仍然是第一次使用时才暴露，不是启动即失败（改成启动即失败是行为变更，需要你确认）。
 3. **演示模式不能放进生产环境**：容器里 `NODE_ENV=production`，此时 `APP_MODE=demo` 会拒绝启动。需要在线演示时应单独部署一套 `NODE_ENV=development` 的环境，并明确标注，不能连真实用户数据。
 
 ## 2. 镜像（⏳ 未在 Docker 里构建过）
@@ -55,6 +55,8 @@ docker run --rm -e NODE_ENV=production -e APP_MODE=demo -e DATABASE_URL=postgres
 | `TRUSTED_PROXY_HOPS` | 按实际层数 | 见 §5 |
 | `AUTH_SECRET`、`PHONE_HMAC_KEY`、`PHONE_ENC_KEY` | 各 ≥32 字符、不得含 dev-only/change-me/example/placeholder | `openssl rand -hex 32`。**`PHONE_HMAC_KEY` 与 `PHONE_ENC_KEY` 一旦使用就不能更换**：更换后已有手机号无法匹配/解密，需要迁移方案（未实现） |
 | `DASHSCOPE_API_KEY` | AI 为 bailian 时必填 | 百炼密钥 |
+| `DASHSCOPE_TEXT_MODEL`、`DASHSCOPE_VISION_MODEL` | AI 为 bailian 时必填 | 文本（分析）与视觉（截图识别）模型名。**代码里没有默认值**：请在百炼控制台核实当前可用、适合的模型后填写；模型名会写入用量记录与分析快照。更换模型后应重新评测 |
+| `DASHSCOPE_BASE_URL` | 可选 | 覆盖 OpenAI 兼容接口地址，默认 `https://dashscope.aliyuncs.com/compatible-mode/v1`（**凭记忆写入，未核实 ⏳**）。生产模式必须是 https |
 | `ALIYUN_ACCESS_KEY_ID`、`ALIYUN_ACCESS_KEY_SECRET` | OSS 或短信时必填 | 建议 RAM 子账号、最小权限（见 §6） |
 | `OSS_BUCKET`、`OSS_REGION` | OSS 时必填 | 私有桶 |
 | `SMS_SIGN_NAME`、`SMS_TEMPLATE_CODE` | 短信时必填 | 签名与模板需先通过运营商审核 |

@@ -1,6 +1,6 @@
 # 交接记录（新对话从这里开始）
 
-> 更新于 2026-11-18，M6a 完成待用户提交时。新对话先读本文件，再读 `README.md`、`GLOSSARY.md`、`docs/verification-matrix.md`。
+> 更新于 2026-11-18，M6b 完成待用户提交时。新对话先读本文件，再读 `README.md`、`GLOSSARY.md`、`docs/verification-matrix.md`。
 
 ## 1. 进度
 
@@ -17,10 +17,12 @@
 | M5a | 数据导出 + 账户删除全流程（隐私功能） | ✅ e3024d7 |
 | M5b | 后台任务状态、成本、用户反馈 | ✅ 5db3266 |
 | M5c | Dockerfile、部署与备案文档、手机端/微信验收清单、最终 AI 评测报告、剩余限制清单（规则保持 experimental） | ✅ 23ed158 |
-| M6a | 真实适配器第一块：阿里云短信 + OSS（官方 SDK，假服务测试，**未对真实服务联调**） | ✅ 本次提交 |
-| **M6b** | **百炼视觉 + 文本适配器（fetch，模型名走必填环境变量）；隐私政策事实清单（用户/法务起草）** | ⏳ 下一步 |
+| M6a | 真实适配器第一块：阿里云短信 + OSS（官方 SDK，假服务测试，**未对真实服务联调**） | ✅ 79722e3 |
+| M6b | 百炼视觉 + 文本适配器（fetch，模型名走必填环境变量）、真实模型评测脚本、隐私政策事实清单 | ✅ 本次提交 |
 
 **MVP 的功能范围在 M5c 完成；M6 起接入真实服务。** 剩下的不是写功能，而是：真实服务适配器（AI/短信/OSS）、真实模型评测、合规核实与备案、真机验收——见 [docs/limitations.md](./limitations.md) 的 A 组（上线阻断）。下一步由用户决定先做哪一块。
+
+M6b 实现要点：`src/server/ai/bailian.ts`（OpenAI 兼容 chat/completions，Node 自带 fetch；`BailianError` 只带错误码：`HTTP_<状态>[:<服务商 code>]`、`TIMEOUT`、`REQUEST_FAILED`、`INVALID_OUTPUT`、`UNSUPPORTED_IMAGE_TYPE`；聊天/事件/截图只放用户消息的 JSON 数据里，系统提示不含内容；200 但无法解析 → 文本模型返回 null 交给流水线校验器判无效并退还，视觉模型抛 `INVALID_OUTPUT`（识别没有校验器兜底）；用量由 `ctx.reportUsage` 上报）；`src/server/ai/bailian-prompts.ts`（提示词，版本 `analysis-prompt-v1-bailian`、`vision-prompt-v1-bailian`，**未在真实模型评测**）；`providers.ts` 新增 `buildAnalysisModel/buildVision`（container 不再有本地的构建函数）；新增环境变量 `DASHSCOPE_TEXT_MODEL`、`DASHSCOPE_VISION_MODEL`（bailian 时必填，无默认值）、`DASHSCOPE_BASE_URL`（可选，生产必须 https，默认地址凭记忆）；`scripts/eval-analysis.ts` 支持 `--provider bailian`，`renderEvalReport` 按 `simulated` 标注报告性质（有单测）；`docs/deploy/privacy-policy-facts.md`。视觉返回的“左/右侧”只作原始标签（“左侧”“右侧”），沿用 recognition 的“先出现的一侧暂作我”再由用户确认；只有“完整日期+时间”才有时间（北京时间）。**M6b 发现（待用户决定）**：同意文案没提到的“感受备注/当前好感值”会发给 AI，见 privacy-policy-facts 页首与 limitations C0。**M6b 没做**：真实联调、真实模型评测、视觉评测脚本与虚构截图集、重试策略（失败即失败，用户重新提交，额度退还）。
 
 M6a 取舍（用户确认）：拆两块（M6a 短信+OSS、M6b 百炼）；短信/OSS 用官方 SDK（`@alicloud/dysmsapi20170525`、`ali-oss`，惰性加载），百炼用 fetch；百炼模型名走必填环境变量不设默认；测试接缝 = 短信适配器单测、存储契约测试（本地+OSS）、百炼适配器单测（注入 fetch，M6b）、环境与装配单测。M6a 实现要点：`src/server/sms/aliyun.ts`（`SmsApi` 薄接口 + `SmsSendError` 只带错误码）、`src/server/storage/{shared,oss}.ts`（key 规则与令牌签名抽成共用，本地与 OSS 共用；OSS 上传带 `x-oss-server-side-encryption: AES256`；`OssClient` 薄接口）、`src/server/providers.ts`（短信与存储装配，从 container 抽出）、新增可选环境变量 `SMS_TEMPLATE_PARAM_NAME`（默认 code）、`next.config.ts` 的 `serverExternalPackages` 加入两个 SDK。测试：`tests/support/storage-contract.ts`（契约，本地与 OSS 共跑）；另有“真实 SDK 对本地假服务”的接线测试各一，只证明请求被正确构造与签名头存在，**不证明阿里云接受**。**M6a 没做的**：百炼；真实联调；SDK 查询串里带手机号与验证码是官方 RPC 风格，HTTPS 下可接受，但代理/日志层要注意不记完整 URL。
 
@@ -87,7 +89,7 @@ M4 验证结果：typecheck、lint、`next build` 通过；vitest 323 个测试�
 
 ## 5. 已知风险与遗留（M3a、M3b 汇报过）
 
-- 真实 AI 服务商未接入：`AI_PROVIDER=bailian` 会抛"尚未实现"；分析与识别都是规则型模拟，评测只验证框架、校验器、程序核验，不代表真实模型质量。
+- 真实 AI：M6b 已写百炼适配器（未联调、提示词未评测）；本地与测试里分析与识别仍是规则型模拟，评测只验证框架、校验器、程序核验，不代表真实模型质量。
 - 同意文案写明服务商留存条件"尚未核实"，核实前不得改写成承诺。
 - worker 在写回结果与额度结算之间崩溃时，依赖 15 分钟清理任务退还额度。
 - 写回时的资源代际校验是纵深防御，目前无法被测试单独触发。

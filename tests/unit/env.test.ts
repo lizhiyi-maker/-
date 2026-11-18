@@ -22,6 +22,8 @@ const prodEnv = {
   PHONE_HMAC_KEY: strong + "1",
   PHONE_ENC_KEY: strong + "2",
   DASHSCOPE_API_KEY: "k",
+  DASHSCOPE_TEXT_MODEL: "text-model-x",
+  DASHSCOPE_VISION_MODEL: "vision-model-y",
   ALIYUN_ACCESS_KEY_ID: "i",
   ALIYUN_ACCESS_KEY_SECRET: "s",
   OSS_BUCKET: "b",
@@ -85,5 +87,25 @@ describe("环境校验与演示开关守卫", () => {
     expect(devLoginAllowed(parseEnv({ ...demoEnv, DEV_LOGIN_ENABLED: "false" }))).toBe(false);
     expect(devLoginAllowed(parseEnv(prodEnv))).toBe(false);
     expect(devLoginAllowed({ APP_MODE: "demo", NODE_ENV: "production", DEV_LOGIN_ENABLED: true })).toBe(false);
+  });
+
+  it("AI_PROVIDER=bailian 必须显式给出文本与视觉模型名（代码里没有默认值）", () => {
+    for (const key of ["DASHSCOPE_TEXT_MODEL", "DASHSCOPE_VISION_MODEL"]) {
+      const bad = { ...prodEnv, [key]: undefined };
+      expect(() => parseEnv(bad)).toThrow(key);
+      expect(() => parseEnv({ ...prodEnv, [key]: "" })).toThrow(EnvError);
+    }
+  });
+
+  it("模型名只在 bailian 时才要求；模拟模型不需要", () => {
+    expect(parseEnv(demoEnv).AI_PROVIDER).toBe("mock");
+  });
+
+  it("DASHSCOPE_BASE_URL 可选；生产模式必须是 https（密钥会随请求发送，不能明文传输）", () => {
+    expect(parseEnv(prodEnv).DASHSCOPE_BASE_URL).toBeUndefined();
+    expect(parseEnv({ ...prodEnv, DASHSCOPE_BASE_URL: "https://dashscope.example.com/compatible-mode/v1" }).DASHSCOPE_BASE_URL).toContain("https://");
+    expect(() => parseEnv({ ...prodEnv, DASHSCOPE_BASE_URL: "http://dashscope.example.com/v1" })).toThrow("DASHSCOPE_BASE_URL");
+    // 演示/本地联调可以指向本机假服务
+    expect(parseEnv({ ...demoEnv, AI_PROVIDER: "bailian", DASHSCOPE_API_KEY: "k", DASHSCOPE_TEXT_MODEL: "t", DASHSCOPE_VISION_MODEL: "v", DASHSCOPE_BASE_URL: "http://127.0.0.1:9999/v1" }).DASHSCOPE_BASE_URL).toBe("http://127.0.0.1:9999/v1");
   });
 });

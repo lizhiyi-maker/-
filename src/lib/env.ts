@@ -24,6 +24,11 @@ const baseSchema = z.object({
   PHONE_HMAC_KEY: secret,
   PHONE_ENC_KEY: secret,
   DASHSCOPE_API_KEY: z.string().optional(),
+  // 百炼的文本（分析）与视觉（截图识别）模型名：AI_PROVIDER=bailian 时必填，代码里不设默认值（以你在控制台核实过的为准）
+  DASHSCOPE_TEXT_MODEL: z.string().optional(),
+  DASHSCOPE_VISION_MODEL: z.string().optional(),
+  // 可选：覆盖 OpenAI 兼容接口地址（默认见 src/server/ai/bailian.ts）。生产模式必须是 https
+  DASHSCOPE_BASE_URL: z.string().optional(),
   ALIYUN_ACCESS_KEY_ID: z.string().optional(),
   ALIYUN_ACCESS_KEY_SECRET: z.string().optional(),
   OSS_BUCKET: z.string().optional(),
@@ -67,7 +72,10 @@ export const envSchema = baseSchema.superRefine((env, ctx) => {
     if (!cond) return;
     for (const k of keys) if (!env[k]) fail(k, `${why} 需要设置 ${k}`);
   };
-  need(env.AI_PROVIDER === "bailian", ["DASHSCOPE_API_KEY"], "AI_PROVIDER=bailian");
+  need(env.AI_PROVIDER === "bailian", ["DASHSCOPE_API_KEY", "DASHSCOPE_TEXT_MODEL", "DASHSCOPE_VISION_MODEL"], "AI_PROVIDER=bailian");
+  if (env.DASHSCOPE_BASE_URL !== undefined && env.APP_MODE === "production" && !/^https:\/\//i.test(env.DASHSCOPE_BASE_URL)) {
+    fail("DASHSCOPE_BASE_URL", "生产模式下必须是 https 地址（API 密钥会随请求发送）");
+  }
   need(env.STORAGE_PROVIDER === "oss", ["ALIYUN_ACCESS_KEY_ID", "ALIYUN_ACCESS_KEY_SECRET", "OSS_BUCKET", "OSS_REGION"], "STORAGE_PROVIDER=oss");
   need(env.SMS_PROVIDER === "aliyun", ["ALIYUN_ACCESS_KEY_ID", "ALIYUN_ACCESS_KEY_SECRET", "SMS_SIGN_NAME", "SMS_TEMPLATE_CODE"], "SMS_PROVIDER=aliyun");
 });

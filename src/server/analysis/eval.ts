@@ -117,20 +117,33 @@ export async function runEvalCases(cases: EvalCase[], model: AnalysisModel): Pro
   });
 }
 
-export function renderEvalReport(results: EvalResult[], model: { id: string; promptVersion: string }, generatedAt: string): string {
-  const lines: string[] = [
-    "# 分析流水线安全评测（模拟模型）",
-    "",
-    `- 生成时间：${generatedAt}`,
-    `- 模型：\`${model.id}\`（规则型模拟模型），提示词版本：\`${model.promptVersion}\``,
-    `- 结果：${results.filter((r) => r.passed).length} / ${results.length} 个用例通过`,
-    "",
-    "> **适用范围**：这些用例经过真实的输出校验器与程序核验，但“模型”是关键词规则写的模拟实现。",
-    "> 它验证的是评测框架、校验器、程序核验、拒绝与注入处理，**不代表任何真实模型的质量**。",
-    "> 真实模型（候选：阿里云百炼通义千问文本模型）的评测尚未进行，见 docs/verification-matrix.md。",
-    "> 用例来源：`samples/eval/analysis-cases.json`（虚构聊天）；对应 docs/scoring/rules-v0-experimental.md §8。",
-    "",
-  ];
+export function renderEvalReport(results: EvalResult[], model: { id: string; promptVersion: string; simulated?: boolean }, generatedAt: string): string {
+  const passed = results.filter((r) => r.passed).length;
+  const lines: string[] = model.simulated
+    ? [
+        "# 分析流水线安全评测（模拟模型）",
+        "",
+        `- 生成时间：${generatedAt}`,
+        `- 模型：\`${model.id}\`（规则型模拟模型），提示词版本：\`${model.promptVersion}\``,
+        `- 结果：${passed} / ${results.length} 个用例通过`,
+        "",
+        "> **适用范围**：这些用例经过真实的输出校验器与程序核验，但“模型”是关键词规则写的模拟实现。",
+        "> 它验证的是评测框架、校验器、程序核验、拒绝与注入处理，**不代表任何真实模型的质量**。",
+        "> 真实模型（候选：阿里云百炼通义千问文本模型）的评测见 docs/evals/final-ai-eval-report.md §5。",
+        "> 用例来源：`samples/eval/analysis-cases.json`（虚构聊天）；对应 docs/scoring/rules-v0-experimental.md §8。",
+        "",
+      ]
+    : [
+        "# 分析流水线安全评测（真实模型）",
+        "",
+        `- 生成时间：${generatedAt}`,
+        `- 模型：\`${model.id}\`，提示词版本：\`${model.promptVersion}\``,
+        `- 结果：${passed} / ${results.length} 个用例通过（**单次运行**：真实模型输出有随机性，通过一次不等于稳定通过；稳定性需要重复运行）`,
+        "",
+        "> **适用范围**：只覆盖 `samples/eval/analysis-cases.json` 里的虚构样本与其中写明的检查项；",
+        "> 不覆盖报告措辞与建议质量的人工评审、视觉识别、耗时与成本。通过线由你确认，见 docs/evals/final-ai-eval-report.md §5。",
+        "",
+      ];
   for (const r of results) {
     lines.push(`## ${r.passed ? "✅" : "❌"} ${r.id} — ${r.title}`, "");
     for (const c of r.checks) lines.push(`- ${c.pass ? "✅" : "❌"} ${c.label}${c.detail && !c.pass ? `（${c.detail}）` : ""}`);
