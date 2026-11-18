@@ -1,9 +1,10 @@
 import { z } from "zod";
 import { assessEvidence, type DataKind, type DimensionStatus, type EvidenceMessage } from "@/domain/analysis/evidence";
-import { validateModelOutput, type AnalysisOutput, type EvidenceRef, type RefMap, type ResolvedSuggestion } from "@/domain/analysis/output";
+import { isEventRef, validateModelOutput, type AnalysisOutput, type EvidenceRef, type RefMap, type ResolvedSuggestion } from "@/domain/analysis/output";
 import { DIMENSION_KEYS } from "@/domain/analysis/rules";
 import type { MessageType, Speaker, TimePrecision } from "@/domain/chat/types";
-import type { AnalysisModel, Fact, InterpretInput, ModelMessage } from "@/server/ai/analysis-model";
+import type { EventKind } from "@/domain/events";
+import type { AnalysisModel, Fact, InterpretInput, ModelEvent, ModelMessage } from "@/server/ai/analysis-model";
 
 /** 分析快照里的一条消息：内容取自快照记录的修订，因此即使之后被编辑也能重建当时的输入。 */
 export interface SnapshotMessage {
@@ -19,8 +20,19 @@ export interface SnapshotMessage {
   dataKind: DataKind;
 }
 
+/** 分析快照里的一个线下事件：事实取自快照记录的修订。个人感受不在其中。 */
+export interface SnapshotEvent {
+  id: string;
+  revision: number;
+  kind: EventKind;
+  occurredOn: Date;
+  content: string;
+}
+
 export interface PipelineInput {
   messages: SnapshotMessage[];
+  /** 用户补充的线下事件（只有事实）；缺省为没有 */
+  events?: SnapshotEvent[];
   model: AnalysisModel;
   preferences: InterpretInput["preferences"];
   userContext: InterpretInput["userContext"];
@@ -66,7 +78,7 @@ export function segmentMessages<T extends { content: string }>(messages: T[], li
 const factSchema = z.object({
   dimension: z.string(),
   text: z.string().trim().min(1).max(400),
-  refs: z.array(z.string().regex(/^M\d+$/)).min(1).max(8),
+  refs: z.array(z.string().regex(/^[ME]\d+$/)).min(1).max(8),
   polarity: z.enum(["support", "counter", "neutral"]),
   signal: z.enum(["explicit_refusal", "temporary_cancel", "cancel_with_reschedule", "injection_ignored"]).optional(),
 });
@@ -96,7 +108,13 @@ export async function runAnalysisPipeline(input: PipelineInput): Promise<Pipelin
     dataKind: m.dataKind,
     snapshot: m,
   }));
-  const refMap: RefMap = new Map(coded.map((c) => [c.code, { messageId: c.snapshot.id, revision: c.snapshot.revision }]));
+  const events = input.events ?? [];
+  const codedEvents: (ModelEvent & { snapshot: SnapshotEvent })[] = events.map((ev, i) => ({ code: `E${i + 1}`, kind: ev.kind, occurredOn: ev.occurredOn, content: ev.content, snapshot: ev }));
+  const forModelEvent = (c: (typeof codedEvents)[number]): ModelEvent => ({ code: c.code, kind: c.kind, occurredOn: c.occurredOn, content: c.content });
+  const refMap: RefMap = new Map<string, EvidenceRef>([
+    ...coded.map((c): [string, EvidenceRef] => [c.code, { messageId: c.snapshot.id, revision: c.snapshot.revision }]),
+    ...codedEvents.map((c): [string, EvidenceRef] => [c.code, { eventId: c.snapshot.id, revision: c.snapshot.revision }]),
+  ]);
   const byCode = new Map(coded.map((c) => [c.code, c.snapshot]));
   const forModel = (c: (typeof coded)[number]): ModelMessage => ({
     code: c.code,
@@ -108,15 +126,18 @@ export async function runAnalysisPipeline(input: PipelineInput): Promise<Pipelin
     dataKind: c.dataKind,
   });
 
-  // 1. 分段提取事实
-  const segments = segmentMessages(coded);
+  // 1. 分段提取事实：先是聊天消息的各段，再是线下事件的各段（事件单独成段，同样限制条数与字数）
+  const segments = [
+    ...segmentMessages(coded).map((s) => ({ messages: s, events: [] as typeof codedEvents })),
+    ...segmentMessages(codedEvents).map((s) => ({ messages: [] as typeof coded, events: s })),
+  ];
   const facts: Fact[] = [];
   try {
     for (const [segmentIndex, segment] of segments.entries()) {
-      const raw = await input.model.extractFacts({ messages: segment.map(forModel), segmentIndex, segmentCount: segments.length });
+      const raw = await input.model.extractFacts({ messages: segment.messages.map(forModel), events: segment.events.map(forModelEvent), segmentIndex, segmentCount: segments.length });
       const parsed = factsSchema.safeParse(raw);
       if (!parsed.success) return { ok: false, code: "INVALID_FACTS", errors: parsed.error.issues.slice(0, 5).map((i) => i.message) };
-      const inSegment = new Set(segment.map((m) => m.code));
+      const inSegment = new Set([...segment.messages.map((m) => m.code), ...segment.events.map((e) => e.code)]);
       for (const f of parsed.data.facts) {
         if (f.dimension !== "none" && !DIMENSION_KEYS.includes(f.dimension)) return { ok: false, code: "INVALID_FACTS", errors: [`未知维度 ${f.dimension}`] };
         const outside = f.refs.filter((r) => !inSegment.has(r));
@@ -136,7 +157,7 @@ export async function runAnalysisPipeline(input: PipelineInput): Promise<Pipelin
   try {
     raw = await input.model.interpret({
       facts,
-      scope: { messageCount: input.messages.length, batchKinds },
+      scope: { messageCount: input.messages.length, eventCount: events.length, batchKinds },
       preferences: input.preferences,
       userContext: input.userContext,
     });
@@ -152,8 +173,14 @@ export async function runAnalysisPipeline(input: PipelineInput): Promise<Pipelin
   // 4. 程序核验
   const warnings: string[] = [];
   const verification: Record<string, DimensionVerification> = {};
+  // 线下事件作为证据单元：每个事件自成一组（一个事件就是一个单元），只有日期精度，因此按日期计情境；
+  // 它是用户自己的记录而不是连续的聊天，所以按“精选”资料对待——只靠事件撑不起“双向投入”这类主动频率与稳定性维度。
   const evidenceOf = (refs: EvidenceRef[]): EvidenceMessage[] =>
-    refs.flatMap((r) => {
+    refs.flatMap((r): EvidenceMessage[] => {
+      if (isEventRef(r)) {
+        const ev = events.find((x) => x.id === r.eventId);
+        return ev ? [{ id: ev.id, batchId: `event:${ev.id}`, seq: 0, occurredAt: ev.occurredOn, timePrecision: "DATE", dataKind: "CURATED" }] : [];
+      }
       const m = input.messages.find((x) => x.id === r.messageId);
       return m ? [{ id: m.id, batchId: m.batchId, seq: m.seq, occurredAt: m.occurredAt, timePrecision: m.timePrecision, dataKind: m.dataKind }] : [];
     });
@@ -177,7 +204,8 @@ export async function runAnalysisPipeline(input: PipelineInput): Promise<Pipelin
   // 明确拒绝：必须有来自“对方”的消息作依据；事实里带拒绝信号且来自对方的，同样视为成立（宁可保守）
   const isOther = (code: string) => byCode.get(code)?.speaker === "OTHER";
   const factRefusalRefs = facts.filter((f) => f.signal === "explicit_refusal").flatMap((f) => f.refs).filter(isOther);
-  const claimedByOther = output.explicitRefusal.refs.some((r) => input.messages.find((m) => m.id === r.messageId)?.speaker === "OTHER");
+  // 线下事件是用户自己的记录，不能证明“对方明确拒绝”：只有对方的聊天消息算数
+  const claimedByOther = output.explicitRefusal.refs.some((r) => !isEventRef(r) && input.messages.find((m) => m.id === r.messageId)?.speaker === "OTHER");
   if (output.explicitRefusal.detected && !claimedByOther) {
     warnings.push("模型声明对方明确拒绝，但引用里没有对方的消息，已撤销该声明");
     output.explicitRefusal = { detected: false, refs: [] };

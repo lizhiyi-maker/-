@@ -8,11 +8,12 @@ import { QuotaError, type Quota } from "@/server/quota/ledger";
 import type { Consent } from "@/server/consent/service";
 import type { AnalysisModel } from "@/server/ai/analysis-model";
 import { computeFreshness, type Freshness } from "@/domain/analysis/freshness";
-import type { AnalysisOutput } from "@/domain/analysis/output";
+import { evidenceKey, isEventRef, type AnalysisOutput, type EvidenceRef } from "@/domain/analysis/output";
+import type { EventKind } from "@/domain/events";
 import { RULES_VERSION } from "@/domain/analysis/rules";
 import type { DataKind } from "@/domain/analysis/evidence";
 import type { MessageType, Speaker, TimePrecision } from "@/domain/chat/types";
-import { runAnalysisPipeline, type DimensionVerification, type SnapshotMessage } from "./pipeline";
+import { runAnalysisPipeline, type DimensionVerification, type SnapshotEvent, type SnapshotMessage } from "./pipeline";
 
 export interface AnalysisJob {
   analysisId: string;
@@ -45,11 +46,21 @@ interface SnapshotRef {
   timePrecision: TimePrecision;
 }
 
+/** 分析快照里一个线下事件的版本引用。事实内容按 (事件, 修订) 回查 OfflineEventRevision；个人感受不在快照里。 */
+interface SnapshotEventRef {
+  id: string;
+  revision: number;
+  kind: EventKind;
+  /** YYYY-MM-DD */
+  occurredOn: string;
+}
+
 export interface ReportView {
   id: string;
   snapshotAt: Date;
   finishedAt: Date | null;
   messageCount: number;
+  eventCount: number;
   batchSummary: Record<DataKind, number>;
   rulesVersion: string;
   promptVersion: string;
@@ -62,6 +73,9 @@ export interface ReportView {
 }
 
 export interface EvidenceEntry {
+  /** 聊天消息，或用户补充的线下事件（此时 content 是事件的事实，不含个人感受） */
+  source: "message" | "event";
+  eventKind: EventKind | null;
   unavailable: boolean;
   content: string;
   speaker: Speaker;
@@ -70,7 +84,7 @@ export interface EvidenceEntry {
   timePrecision: TimePrecision;
   /** 引用的修订号 */
   revision: number;
-  /** 消息当前的修订号；与 revision 不同说明引用之后被用户修改过；消息已删除时为 null */
+  /** 消息/事件当前的修订号；与 revision 不同说明引用之后被用户修改过；已删除时为 null */
   currentRevision: number | null;
   before: { speaker: Speaker; content: string } | null;
   after: { speaker: Speaker; content: string } | null;
@@ -119,6 +133,24 @@ export function createAnalysis(db: Db, deps: AnalysisDeps) {
     }));
   }
 
+  async function takeEventSnapshot(tx: Tx, userId: string, personId: string): Promise<SnapshotEventRef[]> {
+    const rows = await tx.offlineEvent.findMany({ where: { userId, personId }, orderBy: [{ occurredOn: "asc" }, { createdAt: "asc" }, { id: "asc" }] });
+    return rows.map((e) => ({ id: e.id, revision: e.currentRevision, kind: e.kind, occurredOn: e.occurredOn.toISOString().slice(0, 10) }));
+  }
+
+  /** 按 (事件, 修订) 回查事件当时的事实（类型、日期、经过）。 */
+  async function eventRevisions(client: Db | Tx, refs: { id: string; revision: number }[]) {
+    const out = new Map<string, { kind: EventKind; occurredOn: Date; facts: string }>();
+    for (const part of chunks(refs)) {
+      const rows = await client.offlineEventRevision.findMany({
+        where: { OR: part.map((r) => ({ eventId: r.id, revision: r.revision })) },
+        select: { eventId: true, revision: true, kind: true, occurredOn: true, facts: true },
+      });
+      for (const r of rows) out.set(`${r.eventId}:${r.revision}`, { kind: r.kind, occurredOn: r.occurredOn, facts: r.facts });
+    }
+    return out;
+  }
+
   async function revisionContents(client: Db | Tx, refs: { id: string; revision: number }[]) {
     const out = new Map<string, string>();
     for (const part of chunks(refs)) {
@@ -131,8 +163,16 @@ export function createAnalysis(db: Db, deps: AnalysisDeps) {
     return out;
   }
 
-  /** 快照里的消息是否都还在、且仍是被引用的修订（资料被删除或纠正后为 true）。 */
-  async function refsStale(client: Db | Tx, refs: { id: string; revision: number }[]): Promise<boolean> {
+  /**
+   * 快照里的消息与事件是否都还在、且仍是被引用的修订（资料被删除或纠正后为 true）。
+   * 事件只看事实修订：个人感受的改动不产生修订，因此不会让报告过期。
+   */
+  async function refsStale(client: Db | Tx, refs: { id: string; revision: number }[], eventRefs: { id: string; revision: number }[] = []): Promise<boolean> {
+    for (const part of chunks(eventRefs, 1000)) {
+      const rows = await client.offlineEvent.findMany({ where: { id: { in: part.map((r) => r.id) } }, select: { id: true, currentRevision: true } });
+      const current = new Map(rows.map((r) => [r.id, r.currentRevision]));
+      if (part.some((r) => current.get(r.id) !== r.revision)) return true;
+    }
     let found = 0;
     for (const part of chunks(refs, 1000)) {
       const rows = await client.message.findMany({ where: { id: { in: part.map((r) => r.id) } }, select: { id: true, currentRevision: true, state: true } });
@@ -168,6 +208,7 @@ export function createAnalysis(db: Db, deps: AnalysisDeps) {
         if ((await tx.analysis.count({ where: { personId, status: { in: ["QUEUED", "RUNNING"] } } })) > 0) throw new ValidationError("已经有一次分析正在进行");
         const refs = await takeSnapshot(tx, userId, personId);
         if (refs.length === 0) throw new ValidationError("请先导入并保存聊天资料，再开始分析");
+        const eventRefs = await takeEventSnapshot(tx, userId, personId);
         await tx.analysis.create({
           data: {
             id,
@@ -177,6 +218,8 @@ export function createAnalysis(db: Db, deps: AnalysisDeps) {
             snapshotAt: now(),
             messageCount: refs.length,
             snapshotRefs: refs as unknown as Prisma.InputJsonValue,
+            eventRefs: eventRefs as unknown as Prisma.InputJsonValue,
+            eventCount: eventRefs.length,
             preferenceVersion: prefs.version,
             preferenceValues: { expectation: prefs.expectation, contactFrequency: prefs.contactFrequency, pace: prefs.pace, importance: prefs.importance },
             rulesVersion,
@@ -221,7 +264,7 @@ export function createAnalysis(db: Db, deps: AnalysisDeps) {
         const locked = await tx.$queryRaw<{ id: string }[]>`SELECT "id" FROM "Analysis" WHERE "id" = ${analysisId} AND "status"::text = ${from} FOR UPDATE`;
         if (locked.length === 0) return null; // 已被其他路径处理
         let result = outcome;
-        if (result.status === "SUCCEEDED" && (await refsStale(tx, a.snapshotRefs as unknown as SnapshotRef[]))) result = { status: "INVALIDATED" };
+        if (result.status === "SUCCEEDED" && (await refsStale(tx, a.snapshotRefs as unknown as SnapshotRef[], a.eventRefs as unknown as SnapshotEventRef[]))) result = { status: "INVALIDATED" };
         await tx.analysis.update({
           where: { id: analysisId },
           data:
@@ -274,10 +317,21 @@ export function createAnalysis(db: Db, deps: AnalysisDeps) {
       timePrecision: r.timePrecision,
       dataKind: r.dataKind,
     }));
+    const eventRefs = a.eventRefs as unknown as SnapshotEventRef[];
+    const revisions = await eventRevisions(db, eventRefs);
+    if (eventRefs.some((r) => !revisions.has(`${r.id}:${r.revision}`))) {
+      await finish(a.id, { status: "INVALIDATED" }, "RUNNING"); // 提交之后事件已被删除
+      return;
+    }
+    const events: SnapshotEvent[] = eventRefs.map((r) => {
+      const rev = revisions.get(`${r.id}:${r.revision}`)!;
+      return { id: r.id, revision: r.revision, kind: rev.kind, occurredOn: rev.occurredOn, content: rev.facts };
+    });
     const prefs = a.preferenceValues as { expectation: string | null; contactFrequency: string | null; pace: string | null };
 
     const result = await runAnalysisPipeline({
       messages,
+      events,
       model,
       preferences: { expectation: prefs.expectation, contactFrequency: prefs.contactFrequency, pace: prefs.pace },
       userContext: { feelingsNote: person.feelingsNote, currentFeeling: person.feelings[0]?.value ?? null },
@@ -311,19 +365,22 @@ export function createAnalysis(db: Db, deps: AnalysisDeps) {
   async function freshnessOf(
     userId: string,
     personId: string,
-    latest: { snapshotRefs: unknown; rulesVersion: string; preferenceVersion: number },
+    latest: { snapshotRefs: unknown; eventRefs: unknown; rulesVersion: string; preferenceVersion: number },
     preferenceVersion: number,
   ): Promise<Freshness> {
     const refs = latest.snapshotRefs as SnapshotRef[];
+    const eventRefs = latest.eventRefs as SnapshotEventRef[];
     const included = new Set(refs.map((r) => r.batchId));
+    const includedEvents = new Set(eventRefs.map((r) => r.id));
     const confirmed = await db.importBatch.findMany({ where: { userId, personId, status: "CONFIRMED" }, select: { id: true } });
+    const events = await db.offlineEvent.findMany({ where: { userId, personId }, select: { id: true } });
     return computeFreshness(
       { rulesVersion: latest.rulesVersion, preferenceVersion: latest.preferenceVersion },
       {
         rulesVersion,
         preferenceVersion,
-        hasNewData: confirmed.some((b) => !included.has(b.id)),
-        hasStaleRefs: await refsStale(db, refs),
+        hasNewData: confirmed.some((b) => !included.has(b.id)) || events.some((e) => !includedEvents.has(e.id)),
+        hasStaleRefs: await refsStale(db, refs, eventRefs),
       },
     );
   }
@@ -347,6 +404,7 @@ export function createAnalysis(db: Db, deps: AnalysisDeps) {
       snapshotAt: latest.snapshotAt,
       finishedAt: latest.finishedAt,
       messageCount: latest.messageCount,
+      eventCount: latest.eventCount,
       batchSummary,
       rulesVersion: latest.rulesVersion,
       promptVersion: latest.promptVersion,
@@ -361,15 +419,19 @@ export function createAnalysis(db: Db, deps: AnalysisDeps) {
   }
 
   /**
-   * 展开证据：引用的消息内容取自被引用的修订（即使之后被修改，仍是分析当时看到的内容），
-   * 并附上前后各一条作为上下文。
+   * 展开证据：引用的消息/事件内容取自被引用的修订（即使之后被修改，仍是分析当时看到的内容）。
+   * 消息另附前后各一条上下文；事件展开的是事实，不含用户的个人感受。
    */
   async function loadEvidence(userId: string, analysisId: string): Promise<Record<string, EvidenceEntry>> {
     const a = await db.analysis.findFirst({ where: { id: analysisId, userId, status: "SUCCEEDED" } });
     if (!a) throw new NotFoundError("分析报告");
     const out = a.output as unknown as AnalysisOutput;
     const cited = new Map<string, { id: string; revision: number }>();
-    const add = (r: { messageId: string; revision: number }) => cited.set(`${r.messageId}:${r.revision}`, { id: r.messageId, revision: r.revision });
+    const citedEvents = new Map<string, { id: string; revision: number }>();
+    const add = (r: EvidenceRef) => {
+      if (isEventRef(r)) citedEvents.set(`${r.eventId}:${r.revision}`, { id: r.eventId, revision: r.revision });
+      else cited.set(`${r.messageId}:${r.revision}`, { id: r.messageId, revision: r.revision });
+    };
     for (const d of Object.values(out.dimensions)) for (const f of [...d.observedFacts, ...d.supporting, ...d.counter]) f.refs.forEach(add);
     out.suggestions.forEach((s) => s.refs.forEach(add));
     out.explicitRefusal.refs.forEach(add);
@@ -401,7 +463,9 @@ export function createAnalysis(db: Db, deps: AnalysisDeps) {
       const meta = snapshot.get(c.id);
       const cur = current.get(c.id);
       const content = contents.get(key);
-      result[key] = {
+      result[evidenceKey({ messageId: c.id, revision: c.revision })] = {
+        source: "message",
+        eventKind: null,
         unavailable: content === undefined || !meta,
         content: content ?? "",
         speaker: meta?.speaker ?? "UNKNOWN",
@@ -414,7 +478,44 @@ export function createAnalysis(db: Db, deps: AnalysisDeps) {
         after: cur ? (neighbours.get(`${cur.batchId}:${cur.seq + 1}`) ?? null) : null,
       };
     }
+
+    if (citedEvents.size > 0) {
+      const revisions = await eventRevisions(db, [...citedEvents.values()]);
+      const currentEvents = new Map<string, number>();
+      for (const part of chunks([...citedEvents.values()], 1000)) {
+        const rows = await db.offlineEvent.findMany({ where: { id: { in: part.map((c) => c.id) } }, select: { id: true, currentRevision: true } });
+        rows.forEach((r) => currentEvents.set(r.id, r.currentRevision));
+      }
+      for (const [key, c] of citedEvents) {
+        const rev = revisions.get(key);
+        result[evidenceKey({ eventId: c.id, revision: c.revision })] = {
+          source: "event",
+          eventKind: rev?.kind ?? null,
+          unavailable: rev === undefined,
+          content: rev?.facts ?? "",
+          speaker: "UNKNOWN",
+          type: "OTHER",
+          occurredAt: rev?.occurredOn ?? null,
+          timePrecision: "DATE",
+          revision: c.revision,
+          currentRevision: currentEvents.get(c.id) ?? null,
+          before: null,
+          after: null,
+        };
+      }
+    }
     return result;
+  }
+
+  /** 复盘：对象所有成功的分析快照（从旧到新），带资料范围、规则/偏好版本与当时的结论。 */
+  async function listSnapshots(userId: string, personId: string) {
+    await ownedPerson(db, userId, personId);
+    const rows = await db.analysis.findMany({
+      where: { userId, personId, status: "SUCCEEDED" },
+      orderBy: [{ snapshotAt: "asc" }, { id: "asc" }],
+      select: { id: true, snapshotAt: true, messageCount: true, eventCount: true, rulesVersion: true, preferenceVersion: true, output: true },
+    });
+    return rows.map(({ output, ...r }) => ({ ...r, summary: (output as unknown as AnalysisOutput | null)?.conclusion.summary ?? "" }));
   }
 
   /** 首页待办：有已保存资料、没有进行中的分析，但从未分析或报告已不是“最新”的对象。 */
@@ -436,7 +537,7 @@ export function createAnalysis(db: Db, deps: AnalysisDeps) {
     return todo;
   }
 
-  return { start, process, sweepStuck, getReport, loadEvidence, listTodo };
+  return { start, process, sweepStuck, getReport, loadEvidence, listSnapshots, listTodo };
 }
 
 export type AnalysisService = ReturnType<typeof createAnalysis>;

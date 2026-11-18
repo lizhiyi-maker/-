@@ -11,6 +11,7 @@ import { AddAccountForm } from "@/components/account-form";
 import { AnalysisPanel } from "@/components/analysis-panel";
 import { ConfirmButton } from "@/components/confirm-button";
 import { MessageList } from "@/components/message-list";
+import { RecordsPanel } from "@/components/records-panel";
 import { Button } from "@/components/ui/button";
 import { Badge, Card, CardTitle, EmptyState } from "@/components/ui/card";
 import { Select } from "@/components/ui/form-controls";
@@ -36,10 +37,10 @@ export default async function PersonPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ tab?: string; batch?: string; saved?: string; merged?: string }>;
+  searchParams: Promise<{ tab?: string; batch?: string; saved?: string; merged?: string; edit?: string }>;
 }) {
   const { id } = await params;
-  const { tab: rawTab, batch: batchParam, saved, merged } = await searchParams;
+  const { tab: rawTab, batch: batchParam, saved, merged, edit } = await searchParams;
   const tab = TABS.find((t) => t.key === rawTab)?.key ?? "overview";
   const user = await requireUser();
   const person = await getServices()
@@ -275,7 +276,7 @@ export default async function PersonPage({
         </div>
       )}
       {tab === "analysis" && <AnalysisPanel userId={user.id} personId={id} />}
-      {tab === "records" && <EmptyState title="暂无关系记录">线下事件、好感变化与分析快照的时间线将在后续阶段开放。</EmptyState>}
+      {tab === "records" && <RecordsPanel userId={user.id} personId={id} editId={edit} />}
     </section>
   );
 }

@@ -1,17 +1,31 @@
 import { z } from "zod";
 import { DIMENSION_KEYS, LEVEL_KEYS } from "./rules";
 
-/** 报告里的一条引用：消息 + 修订（见 ADR-0002）。 */
-export interface EvidenceRef {
+/** 对一条聊天消息某个修订的引用（见 ADR-0002）。 */
+export interface MessageRef {
   messageId: string;
   revision: number;
 }
 
+/** 对一个线下事件某个事实修订的引用。个人感受不是证据，永远不会被引用。 */
+export interface EventRef {
+  eventId: string;
+  revision: number;
+}
+
+/** 报告里的一条引用：消息 + 修订，或线下事件 + 修订。M3a 时期保存的报告只有消息引用。 */
+export type EvidenceRef = MessageRef | EventRef;
+
+export const isEventRef = (r: EvidenceRef): r is EventRef => "eventId" in r;
+
+/** 引用的稳定键（证据展开用）。消息引用的键保持 M3a 的格式。 */
+export const evidenceKey = (r: EvidenceRef): string => (isEventRef(r) ? `event:${r.eventId}:${r.revision}` : `${r.messageId}:${r.revision}`);
+
 export const SUGGESTION_KINDS = ["ADVANCE", "MAINTAIN", "CLARIFY", "RESPECT_BOUNDARY"] as const;
 export type SuggestionKind = (typeof SUGGESTION_KINDS)[number];
 
-/** 模型在提示里看到的是短代码（M1、M2…），由程序映射到真实的 消息ID + 修订。 */
-const refCode = z.string().regex(/^M\d+$/, "引用必须是形如 M12 的消息代码");
+/** 模型在提示里看到的是短代码（消息 M1、M2…，线下事件 E1、E2…），由程序映射到真实的 消息/事件 ID + 修订。 */
+const refCode = z.string().regex(/^[ME]\d+$/, "引用必须是形如 M12（消息）或 E3（线下事件）的代码");
 const text = (max: number) => z.string().trim().min(1).max(max);
 
 const evidenceItem = z.object({ text: text(300), refs: z.array(refCode).min(1, "事实和证据必须引用真实消息").max(8) });

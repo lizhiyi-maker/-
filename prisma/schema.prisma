@@ -41,6 +41,7 @@ model User {
   screenshots   Screenshot[]
   consents      ConsentRecord[]
   analyses      Analysis[]
+  events        OfflineEvent[]
 }
 
 model Session {
@@ -161,6 +162,7 @@ model Person {
   messages    Message[]
   screenshots Screenshot[]
   analyses    Analysis[]
+  events      OfflineEvent[]
 
   @@index([userId, status])
 }
@@ -408,6 +410,10 @@ model Analysis {
   /// 输入资料快照：按顺序的 [{ id, revision, batchId, dataKind, seq, speaker, type, occurredAt, timePrecision }]。
   /// 内容不重复存放，按 (消息, 修订) 回查 MessageRevision 即可重建（修订只增不改，见 ADR-0002）。
   snapshotRefs      Json
+  /// 输入的线下事件快照：[{ id, revision, kind, occurredOn }]。事实内容按 (事件, 修订) 回查 OfflineEventRevision；
+  /// 个人感受不在其中，也从不发送给 AI 服务商。M3a 时期的旧分析为空数组。
+  eventRefs         Json           @default("[]")
+  eventCount        Int            @default(0)
   preferenceVersion Int
   preferenceValues  Json
   rulesVersion      String
@@ -429,6 +435,55 @@ model Analysis {
 
   @@index([personId, status, finishedAt])
   @@index([userId, status])
+}
+
+// ───────── 线下事件 ─────────
+
+/// 线下事件的类型：见面、通话、取消安排、补充事实
+enum EventKind {
+  MEET
+  CALL
+  CANCELLED
+  FACT_NOTE
+}
+
+/// 用户补充记录的线下事件。事实（类型、日期、经过）与个人感受分开保存：
+/// 事实在每次修订里留存快照，可被报告引用；个人感受只留在本行，可随时修改，不是证据，也不发送给 AI 服务商。
+model OfflineEvent {
+  id              String    @id @default(cuid())
+  userId          String
+  personId        String
+  /// 当前修订的类型与日期（冗余，便于排序与查询；与最新修订一致）
+  kind            EventKind
+  /// 事件发生的日期（UTC 零点表示的日期）
+  occurredOn      DateTime  @db.Date
+  /// 当前事实修订号；事实被修改时加 1，使引用旧修订的报告过期
+  currentRevision Int       @default(1)
+  /// 用户的个人感受：不是对方的客观事实，不版本化
+  personalNote    String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  user      User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  person    Person                 @relation(fields: [personId], references: [id], onDelete: Cascade)
+  revisions OfflineEventRevision[]
+
+  @@index([personId, occurredOn])
+}
+
+/// 事实修订只增不改；证据引用 事件 + 修订（同 ADR-0002）
+model OfflineEventRevision {
+  id         String    @id @default(cuid())
+  eventId    String
+  revision   Int
+  kind       EventKind
+  occurredOn DateTime  @db.Date
+  facts      String
+  createdAt  DateTime  @default(now())
+
+  event OfflineEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, revision])
 }
 
 // ───────── 偏好 ─────────

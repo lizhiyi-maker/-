@@ -3,6 +3,7 @@ import { runAnalysisPipeline, segmentMessages, type SnapshotMessage } from "@/se
 import { createMockAnalysisModel } from "@/server/ai/mock-analysis";
 import type { AnalysisModel } from "@/server/ai/analysis-model";
 import { DIMENSION_KEYS } from "@/domain/analysis/rules";
+import type { MessageRef } from "@/domain/analysis/output";
 
 const DAY = 86_400_000;
 const T0 = new Date("2026-03-01T12:00:00Z").getTime();
@@ -50,7 +51,7 @@ describe("长聊天分段", () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.meta.segments).toBeGreaterThan(1);
-    const refs = Object.values(r.output.dimensions).flatMap((d) => [...d.observedFacts, ...d.supporting, ...d.counter].flatMap((f) => f.refs));
+    const refs = Object.values(r.output.dimensions).flatMap((d) => [...d.observedFacts, ...d.supporting, ...d.counter].flatMap((f) => f.refs)) as MessageRef[];
     expect(refs.length).toBeGreaterThan(0);
     for (const ref of refs) {
       expect(ids.has(ref.messageId)).toBe(true);

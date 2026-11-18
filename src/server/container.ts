@@ -10,6 +10,7 @@ import { createAdmin } from "@/server/admin/service";
 import { createAnalysis } from "@/server/analysis/service";
 import { createAuth } from "@/server/auth/service";
 import { createConsent } from "@/server/consent/service";
+import { createEvents } from "@/server/events/service";
 import { providerInfo } from "@/domain/consent";
 import { createImports } from "@/server/imports/service";
 import { createPeople } from "@/server/people/service";
@@ -68,6 +69,7 @@ function build() {
     auth: createAuth(db, { sms: buildSms(env.SMS_PROVIDER), keys }),
     provider,
     consent,
+    events: createEvents(db),
     people: createPeople(db, { quota }),
     imports: createImports(db, { storage, quota }),
     recognition: createRecognition(db, { storage, quota, consent, vision: buildVision(env), queue }),

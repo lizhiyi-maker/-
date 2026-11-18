@@ -3,6 +3,7 @@ import { newTestDb } from "../support/db";
 import { makeUser } from "../support/factories";
 import { createAnalysis, type AnalysisJob } from "@/server/analysis/service";
 import { createConsent } from "@/server/consent/service";
+import { createEvents } from "@/server/events/service";
 import { createImports } from "@/server/imports/service";
 import { createPeople } from "@/server/people/service";
 import { createPreferences } from "@/server/preferences/service";
@@ -11,6 +12,7 @@ import { createMockAnalysisModel } from "@/server/ai/mock-analysis";
 import type { AnalysisModel } from "@/server/ai/analysis-model";
 import { ConsentRequiredError, NotFoundError, ValidationError } from "@/server/errors";
 import { DIMENSION_KEYS } from "@/domain/analysis/rules";
+import type { MessageRef } from "@/domain/analysis/output";
 
 let ctx: Awaited<ReturnType<typeof newTestDb>>;
 beforeAll(async () => {
@@ -58,6 +60,7 @@ function env(opts: { model?: AnalysisModel; rulesVersion?: string } = {}) {
     jobs,
     imports: createImports(ctx.db, { quota }),
     people: createPeople(ctx.db, { quota }),
+    events: createEvents(ctx.db),
     advance: (ms: number) => (now = new Date(now.getTime() + ms)),
     drain: async (a = analysis) => {
       while (jobs.length) await a.process(jobs.shift()!);
@@ -154,7 +157,7 @@ describe("执行分析与报告", () => {
     expect(out.suggestions.length).toBeLessThanOrEqual(3);
 
     const snapshotIds = new Set(((await ctx.db.analysis.findUniqueOrThrow({ where: { id: analysisId } })).snapshotRefs as { id: string }[]).map((r) => r.id));
-    const refs = Object.values(out.dimensions).flatMap((d) => [...d.observedFacts, ...d.supporting, ...d.counter].flatMap((f) => f.refs));
+    const refs = Object.values(out.dimensions).flatMap((d) => [...d.observedFacts, ...d.supporting, ...d.counter].flatMap((f) => f.refs)) as MessageRef[]; // 这批资料没有线下事件
     expect(refs.length).toBeGreaterThan(0);
     for (const r of refs) expect(snapshotIds.has(r.messageId)).toBe(true);
 
@@ -306,7 +309,7 @@ describe("报告新鲜度", () => {
     const e = env();
     const { user, person, analysisId } = await withReport(e);
     const report = (await e.analysis.getReport(user.id, person.id)).latest!;
-    const ref = Object.values(report.output.dimensions).flatMap((d) => d.observedFacts.flatMap((f) => f.refs))[0];
+    const ref = Object.values(report.output.dimensions).flatMap((d) => d.observedFacts.flatMap((f) => f.refs))[0] as MessageRef;
     const original = (await e.analysis.loadEvidence(user.id, analysisId))[`${ref.messageId}:${ref.revision}`].content;
 
     await e.imports.editMessage(user.id, ref.messageId, { content: "（用户纠正后的内容）" });
@@ -417,5 +420,252 @@ describe("用户归属", () => {
     await expect(e.analysis.loadEvidence(b.id, analysisId)).rejects.toBeInstanceOf(NotFoundError);
     expect(await e.analysis.listTodo(b.id)).toEqual([]);
     expect((await e.analysis.getReport(a.user.id, a.person.id)).latest?.id).toBe(analysisId);
+  });
+});
+
+describe("线下事件接入分析（M3b）", () => {
+  const MEET = (day: string, facts = "在咖啡店见面，她按约定准时到了") => ({ kind: "MEET" as const, occurredOn: day, facts });
+  const evidenceRefsOf = (report: NonNullable<Awaited<ReturnType<Env["analysis"]["getReport"]>>["latest"]>) =>
+    Object.values(report.output.dimensions).flatMap((d) => [...d.observedFacts, ...d.supporting, ...d.counter].flatMap((f) => f.refs));
+
+  async function withEvents(e: Env, events: { kind: "MEET" | "CALL" | "CANCELLED" | "FACT_NOTE"; occurredOn: string; facts: string; personalNote?: string }[]) {
+    const s = await setup(e);
+    const created = [];
+    for (const ev of events) created.push(await e.events.create(s.user.id, s.person.id, ev));
+    return { ...s, created };
+  }
+  const analyse = async (e: Env, s: { user: { id: string }; person: { id: string } }) => {
+    const { analysisId } = await e.analysis.start(s.user.id, s.person.id);
+    await e.drain();
+    return analysisId;
+  };
+
+  it("提交时把当前事件（及修订号）记入快照；没有事件的对象快照里事件为空", async () => {
+    const e = env();
+    const s = await withEvents(e, [{ ...MEET("2026-03-03"), personalNote: "很开心" }, { kind: "CALL", occurredOn: "2026-03-04", facts: "通话十分钟" }]);
+    const { analysisId } = await e.analysis.start(s.user.id, s.person.id);
+    const row = await ctx.db.analysis.findUniqueOrThrow({ where: { id: analysisId } });
+    expect(row.eventCount).toBe(2);
+    expect(row.messageCount).toBe(4);
+    const refs = row.eventRefs as { id: string; revision: number; kind: string }[];
+    expect(refs.map((r) => [r.id, r.revision, r.kind]).sort()).toEqual([[s.created[0].id, 1, "MEET"], [s.created[1].id, 1, "CALL"]].sort());
+
+    const bare = await setup(e);
+    const bareId = (await e.analysis.start(bare.user.id, bare.person.id)).analysisId;
+    expect(await ctx.db.analysis.findUniqueOrThrow({ where: { id: bareId } })).toMatchObject({ eventCount: 0, eventRefs: [] });
+  });
+
+  it("只有事件、没有保存的聊天资料时不能开始分析（事件是补充资料）", async () => {
+    const e = env();
+    const s = await setup(e, { chat: null });
+    await e.events.create(s.user.id, s.person.id, MEET("2026-03-03"));
+    await expect(e.analysis.start(s.user.id, s.person.id)).rejects.toBeInstanceOf(ValidationError);
+    expect(await available(e, s.user.id)).toBe(8);
+  });
+
+  it("个人感受从不发送给模型；事件的事实会发送，并带事件代号", async () => {
+    const seen: unknown[] = [];
+    const base = createMockAnalysisModel();
+    const e = env({
+      model: {
+        ...base,
+        async extractFacts(input) {
+          seen.push(input);
+          return base.extractFacts(input);
+        },
+        async interpret(input) {
+          seen.push(input);
+          return base.interpret(input);
+        },
+      },
+    });
+    const s = await withEvents(e, [{ ...MEET("2026-03-03"), personalNote: "绝密的个人感受：我其实很紧张" }]);
+    await analyse(e, s);
+    const sent = JSON.stringify(seen);
+    expect(sent).not.toContain("绝密的个人感受");
+    expect(sent).toContain("在咖啡店见面");
+    expect(sent).toContain('"E1"');
+  });
+
+  it("事件是证据：报告里可以引用事件，展开证据得到事件的事实（不含个人感受）", async () => {
+    const e = env();
+    const s = await withEvents(e, [{ ...MEET("2026-03-03"), personalNote: "绝密的个人感受" }]);
+    const analysisId = await analyse(e, s);
+    const report = (await e.analysis.getReport(s.user.id, s.person.id)).latest!;
+    const eventRefs = [...new Set(evidenceRefsOf(report).filter((r) => "eventId" in r).map((r) => JSON.stringify(r)))].map((r) => JSON.parse(r)); // 同一事实常同时列在“观察”与“支持”里
+    expect(eventRefs).toEqual([{ eventId: s.created[0].id, revision: 1 }]);
+
+    const evidence = await e.analysis.loadEvidence(s.user.id, analysisId);
+    const entry = evidence[`event:${s.created[0].id}:1`];
+    expect(entry).toMatchObject({ source: "event", unavailable: false, eventKind: "MEET", content: "在咖啡店见面，她按约定准时到了", revision: 1, currentRevision: 1 });
+    expect(JSON.stringify(evidence)).not.toContain("绝密的个人感受");
+    expect(report.eventCount).toBe(1);
+  });
+
+  it("每个事件算一个证据单元、按日期计情境：三个不同日期的见面 → 行动兑现“已知”；同一天的三次 → 只有一个情境，不够", async () => {
+    const e = env();
+    const spread = await withEvents(e, [MEET("2026-03-03"), MEET("2026-03-10"), MEET("2026-03-17")]);
+    await analyse(e, spread);
+    const a = (await e.analysis.getReport(spread.user.id, spread.person.id)).latest!;
+    expect(a.verification.follow_through).toMatchObject({ status: "known", units: 3, contexts: 3 });
+
+    const sameDay = await withEvents(e, [MEET("2026-03-03"), MEET("2026-03-03", "又见了一面"), MEET("2026-03-03", "晚上又碰到")]);
+    await analyse(e, sameDay);
+    const b = (await e.analysis.getReport(sameDay.user.id, sameDay.person.id)).latest!;
+    expect(b.verification.follow_through).toMatchObject({ status: "clue", units: 3, contexts: 1 });
+  });
+
+  it("对方“明确拒绝”不能只靠事件成立：模型引用事件声明拒绝会被程序撤销", async () => {
+    const base = createMockAnalysisModel();
+    const e = env({
+      model: {
+        ...base,
+        async interpret(input) {
+          const out = (await base.interpret(input)) as { explicitRefusal: unknown };
+          out.explicitRefusal = { detected: true, refs: ["E1"] };
+          return out;
+        },
+      },
+    });
+    const s = await withEvents(e, [{ kind: "FACT_NOTE", occurredOn: "2026-03-03", facts: "她当面说希望我少联系" }]);
+    await analyse(e, s);
+    const report = (await e.analysis.getReport(s.user.id, s.person.id)).latest!;
+    expect(report.explicitRefusal).toBe(false);
+    expect(report.warnings.join()).toMatch(/没有对方的消息/);
+  });
+
+  it("模型编造事件代号：整次分析失败，不入库，额度退还", async () => {
+    const base = createMockAnalysisModel();
+    const e = env({
+      model: {
+        ...base,
+        async interpret(input) {
+          const out = (await base.interpret(input)) as { dimensions: Record<string, { observedFacts: unknown[] }> };
+          out.dimensions.follow_through.observedFacts = [{ text: "编造", refs: ["E99"] }];
+          return out;
+        },
+      },
+    });
+    const s = await withEvents(e, [MEET("2026-03-03")]);
+    const analysisId = await analyse(e, s);
+    expect(await ctx.db.analysis.findUniqueOrThrow({ where: { id: analysisId } })).toMatchObject({ status: "FAILED", errorCode: "INVALID_OUTPUT", output: null });
+    expect(await available(e, s.user.id)).toBe(8);
+  });
+
+  describe("新鲜度", () => {
+    it("新增事件 → “有新资料待分析”：不自动分析，旧报告保留；首页待办提示", async () => {
+      const e = env();
+      const s = await withEvents(e, [MEET("2026-03-03")]);
+      const analysisId = await analyse(e, s);
+      expect((await e.analysis.getReport(s.user.id, s.person.id)).freshness).toBe("FRESH");
+
+      await e.events.create(s.user.id, s.person.id, { kind: "CALL", occurredOn: "2026-03-08", facts: "通话" });
+      const r = await e.analysis.getReport(s.user.id, s.person.id);
+      expect(r.freshness).toBe("NEW_DATA");
+      expect(r.latest?.id).toBe(analysisId);
+      expect(e.jobs).toHaveLength(0);
+      expect(await e.analysis.listTodo(s.user.id)).toEqual([expect.objectContaining({ personId: s.person.id, reason: "NEW_DATA" })]);
+    });
+
+    it("M3a 时期没有事件的旧报告：之后补充事件 → “有新资料待分析”", async () => {
+      const e = env();
+      const s = await setup(e);
+      await analyse(e, s);
+      await e.events.create(s.user.id, s.person.id, MEET("2026-03-03"));
+      expect((await e.analysis.getReport(s.user.id, s.person.id)).freshness).toBe("NEW_DATA");
+    });
+
+    it("修改快照里事件的事实 → “资料纠正已过期”；展开证据仍是分析当时的修订内容", async () => {
+      const e = env();
+      const s = await withEvents(e, [MEET("2026-03-03")]);
+      const analysisId = await analyse(e, s);
+      await e.events.update(s.user.id, s.created[0].id, { facts: "（纠正）其实是在餐厅见面" });
+      expect((await e.analysis.getReport(s.user.id, s.person.id)).freshness).toBe("CORRECTED_EXPIRED");
+      const entry = (await e.analysis.loadEvidence(s.user.id, analysisId))[`event:${s.created[0].id}:1`];
+      expect(entry).toMatchObject({ content: "在咖啡店见面，她按约定准时到了", revision: 1, currentRevision: 2, unavailable: false });
+    });
+
+    it("只修改事件的个人感受 → 报告仍是“最新”（感受不是证据）", async () => {
+      const e = env();
+      const s = await withEvents(e, [{ ...MEET("2026-03-03"), personalNote: "有点紧张" }]);
+      await analyse(e, s);
+      await e.events.update(s.user.id, s.created[0].id, { personalNote: "其实很放松" });
+      expect((await e.analysis.getReport(s.user.id, s.person.id)).freshness).toBe("FRESH");
+    });
+
+    it("删除快照里的事件 → “资料纠正已过期”；证据显示已删除", async () => {
+      const e = env();
+      const s = await withEvents(e, [MEET("2026-03-03")]);
+      const analysisId = await analyse(e, s);
+      await e.events.remove(s.user.id, s.created[0].id);
+      expect((await e.analysis.getReport(s.user.id, s.person.id)).freshness).toBe("CORRECTED_EXPIRED");
+      expect((await e.analysis.loadEvidence(s.user.id, analysisId))[`event:${s.created[0].id}:1`]).toMatchObject({ unavailable: true });
+    });
+  });
+
+  describe("分析期间事件变化", () => {
+    it("分析期间事件的事实被纠正：结果作废（INVALIDATED），额度退还", async () => {
+      const e = env();
+      const s = await withEvents(e, [MEET("2026-03-03")]);
+      const { analysisId } = await e.analysis.start(s.user.id, s.person.id);
+      const base = createMockAnalysisModel();
+      e.model.current = {
+        ...base,
+        async interpret(input) {
+          await e.events.update(s.user.id, s.created[0].id, { facts: "纠正后的事实" });
+          return base.interpret(input);
+        },
+      };
+      await e.drain();
+      expect((await ctx.db.analysis.findUniqueOrThrow({ where: { id: analysisId } })).status).toBe("INVALIDATED");
+      expect(await available(e, s.user.id)).toBe(8);
+    });
+
+    it("分析期间事件被删除：结果作废，额度退还", async () => {
+      const e = env();
+      const s = await withEvents(e, [MEET("2026-03-03")]);
+      const { analysisId } = await e.analysis.start(s.user.id, s.person.id);
+      const base = createMockAnalysisModel();
+      e.model.current = {
+        ...base,
+        async interpret(input) {
+          await e.events.remove(s.user.id, s.created[0].id);
+          return base.interpret(input);
+        },
+      };
+      await e.drain();
+      expect((await ctx.db.analysis.findUniqueOrThrow({ where: { id: analysisId } })).status).toBe("INVALIDATED");
+      expect(await available(e, s.user.id)).toBe(8);
+    });
+
+    it("提交之后、worker 取走之前事件已被删除：作废并退还", async () => {
+      const e = env();
+      const s = await withEvents(e, [MEET("2026-03-03")]);
+      const { analysisId } = await e.analysis.start(s.user.id, s.person.id);
+      await e.events.remove(s.user.id, s.created[0].id);
+      await e.drain();
+      expect((await ctx.db.analysis.findUniqueOrThrow({ where: { id: analysisId } })).status).toBe("INVALIDATED");
+      expect(await available(e, s.user.id)).toBe(8);
+    });
+  });
+
+  it("分析快照列表（复盘用）：只含成功的分析，按时间排列，带资料范围、版本与结论", async () => {
+    const e = env();
+    const s = await withEvents(e, [MEET("2026-03-03")]);
+    const first = await analyse(e, s);
+    e.advance(60_000);
+    await e.events.create(s.user.id, s.person.id, { kind: "CALL", occurredOn: "2026-03-08", facts: "通话" });
+    const second = await analyse(e, s);
+    e.model.current = { ...createMockAnalysisModel(), async extractFacts() { throw new Error("失败"); } };
+    await analyse(e, s); // 失败的不出现
+
+    const list = await e.analysis.listSnapshots(s.user.id, s.person.id);
+    expect(list.map((x) => x.id)).toEqual([first, second]);
+    expect(list[0]).toMatchObject({ messageCount: 4, eventCount: 1, rulesVersion: "v0-experimental", preferenceVersion: 0 });
+    expect(list[1].eventCount).toBe(2);
+    expect(list[0].summary).toMatch(/基于 4 条消息/);
+
+    const other = await makeUser(ctx.db);
+    await expect(e.analysis.listSnapshots(other.id, s.person.id)).rejects.toBeInstanceOf(NotFoundError);
   });
 });

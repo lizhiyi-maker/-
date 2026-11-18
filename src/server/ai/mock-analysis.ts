@@ -1,5 +1,6 @@
 import { DIMENSION_KEYS } from "@/domain/analysis/rules";
-import type { AnalysisModel, ExtractInput, Fact, InterpretInput, ModelMessage } from "./analysis-model";
+import { EVENT_KIND_LABEL } from "@/domain/events";
+import type { AnalysisModel, ExtractInput, Fact, InterpretInput, ModelEvent, ModelMessage } from "./analysis-model";
 
 /**
  * 规则型“模拟分析模型”：只用于本地演示与自动化测试，**不代表任何真实模型的质量**。
@@ -85,6 +86,28 @@ export function extractFactsByRules(messages: ModelMessage[]): Fact[] {
   return facts;
 }
 
+/**
+ * 线下事件：只读事实。见面算作“行动兑现”的一次支持（约定的见面确实发生了），取消只记为一次临时取消（不判断兑现能力）；
+ * 通话与补充事实只作为背景记录，不归入任何维度——模拟模型读不懂它们的含义，宁可不下判断。
+ * 事件是用户自己的记录，这里不会从中认定“对方明确拒绝”。
+ */
+export function extractEventFactsByRules(events: ModelEvent[]): Fact[] {
+  const facts: Fact[] = [];
+  for (const ev of events) {
+    const day = ev.occurredOn.toISOString().slice(0, 10);
+    if (INJECTION.test(ev.content)) {
+      facts.push({ dimension: "none", text: "这条事件记录里有疑似指令的文字，已按普通记录处理，没有执行，也没有用它评价任何维度。", refs: [ev.code], polarity: "neutral", signal: "injection_ignored" });
+    } else if (ev.kind === "MEET") {
+      facts.push({ dimension: "follow_through", text: `${day} 有一次见面（你的记录）：“${short(ev.content)}”`, refs: [ev.code], polarity: "support" });
+    } else if (ev.kind === "CANCELLED") {
+      facts.push({ dimension: "follow_through", text: `${day} 有一次安排被取消（你的记录）：“${short(ev.content)}”。仅凭一次取消不能判断兑现能力。`, refs: [ev.code], polarity: "neutral", signal: "temporary_cancel" });
+    } else {
+      facts.push({ dimension: "none", text: `${day} 的${EVENT_KIND_LABEL[ev.kind]}记录（你的记录）：“${short(ev.content)}”。只作为背景，不据此评价任何维度。`, refs: [ev.code], polarity: "neutral" });
+    }
+  }
+  return facts;
+}
+
 const MISSING: Record<string, string> = {
   mutual_investment: "只看到零散的互动，无法判断双方主动与回应是否对等",
   willingness_to_know: "资料里对方了解你的表现很少",
@@ -141,7 +164,7 @@ export function interpretByRules(input: InterpretInput): unknown {
   );
 
   const kinds = input.scope.batchKinds;
-  const scope = `基于 ${input.scope.messageCount} 条消息（连续聊天 ${kinds.CONTINUOUS} 批，精选片段 ${kinds.CURATED} 批，不确定 ${kinds.UNCERTAIN} 批）。`;
+  const scope = `基于 ${input.scope.messageCount} 条消息（连续聊天 ${kinds.CONTINUOUS} 批，精选片段 ${kinds.CURATED} 批，不确定 ${kinds.UNCERTAIN} 批）${input.scope.eventCount > 0 ? `和 ${input.scope.eventCount} 个线下事件` : ""}。`;
   const summary = refusal
     ? `${scope}对方明确表示不希望继续联系，请尊重对方的意愿。`
     : `${scope}这是对已有资料的整理，不是对对方的评价；证据不足的维度只作为线索或标为资料不足。`;
@@ -183,7 +206,7 @@ export function createMockAnalysisModel(): AnalysisModel {
     id: MOCK_ANALYSIS_MODEL_ID,
     promptVersion: MOCK_PROMPT_VERSION,
     async extractFacts(input: ExtractInput) {
-      return { facts: extractFactsByRules(input.messages) };
+      return { facts: [...extractFactsByRules(input.messages), ...extractEventFactsByRules(input.events)] };
     },
     async interpret(input: InterpretInput) {
       return interpretByRules(input);

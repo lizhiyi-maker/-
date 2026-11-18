@@ -48,7 +48,7 @@ npm run eval:analysis   # 分析流水线安全评测（模拟模型），写入
 | `src/app` | Next.js 页面与 API |
 | `src/worker` | pg-boss 独立 worker 进程（其内部表在 `pgboss` schema，由 pg-boss 自己迁移，不入 Prisma） |
 | `prisma/` | 业务数据模型与迁移 |
-| `src/server/` | 服务层：auth、people、preferences、quota、admin（均以 userId 限定范围） |
+| `src/server/` | 服务层：auth、people、events（线下事件）、preferences、quota、imports、analysis、admin（均以 userId 限定范围） |
 | `src/domain/` | 与框架无关的领域定义（标签、校验） |
 | `config/scoring/` | 评分规则配置（唯一数值来源，实验规则） |
 | `docs/` | 方案、业务规范、评分规则、ADR |
@@ -60,3 +60,4 @@ npm run eval:analysis   # 分析流水线安全评测（模拟模型），写入
 - **不要在服务端代码里写带字面量路径的 `resolve(".xxx")` / `join(process.cwd(), ...)`**。Turbopack 会把它当成对项目目录的文件依赖，开发服务器自己写的 `.next/dev/trace` 又会触发重新编译，页面会无限整页重载（实测 8 秒 343 次，e2e 随机超时）。存储目录的默认值放在 [src/lib/env.ts](src/lib/env.ts) 的 zod schema 里，见 [src/server/container.ts](src/server/container.ts) 的注释。
 - 边缘层（`src/app/` 下的页面、路由、Server Action）判断领域错误用 `isDomainError(e, "名称")`，不要用 `instanceof`：Next 会把它们分别打包，每份可能带有自己的 `errors.ts` 副本，而服务容器是进程内单例。
 - e2e 的数据库、上传目录和测试产物都放在系统临时目录，不要放进仓库：开发服务器监视项目目录，运行期间在项目内写文件可能触发整页重载。
+- 如果 e2e 的 warmup 在登录页反复重载（按钮“detached from the DOM”、两次重试都失败），先删除 `.next/dev` 再重跑：改了 Prisma 模式或重新生成客户端之后、或上次开发服务器被强杀之后，缓存可能不一致（M3b 实测删除后恢复）。

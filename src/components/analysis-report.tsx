@@ -1,10 +1,11 @@
 import { Badge, Card, CardTitle } from "@/components/ui/card";
 import { messageTimeText } from "@/components/message-list";
 import { FRESHNESS_LABEL, type Freshness } from "@/domain/analysis/freshness";
-import type { EvidenceRef, ResolvedDimension, SuggestionKind } from "@/domain/analysis/output";
+import { evidenceKey, type EvidenceRef, type ResolvedDimension, type SuggestionKind } from "@/domain/analysis/output";
+import { EVENT_KIND_LABEL } from "@/domain/events";
 import { DIMENSION_KEYS, dimensionLabel, levelLabel, RULES_EXPERIMENTAL, scoringRules } from "@/domain/analysis/rules";
 import { SPEAKER_LABEL } from "@/domain/imports";
-import { formatDateTime } from "@/lib/format";
+import { formatDate, formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { EvidenceEntry, ReportView } from "@/server/analysis/service";
 
@@ -12,22 +13,36 @@ const STATUS_LABEL = { known: "已知", clue: "线索", insufficient: "资料不
 const STATUS_TONE = { known: "primary", clue: "warn", insufficient: "muted" } as const;
 const KIND_LABEL: Record<SuggestionKind, string> = { ADVANCE: "推进", MAINTAIN: "保持", CLARIFY: "了解", RESPECT_BOUNDARY: "尊重边界" };
 
-/** 一条证据：引用的消息（取自被引用的修订）及前后各一条上下文。 */
+/** 一条证据：引用的消息（取自被引用的修订）及前后各一条上下文，或用户补充的线下事件（只有事实，不含个人感受）。 */
 function EvidenceList({ refs, evidence }: { refs: EvidenceRef[]; evidence: Record<string, EvidenceEntry> }) {
   return (
     <ul className="mt-2 space-y-2" data-testid="evidence-list">
       {refs.map((r) => {
-        const e = evidence[`${r.messageId}:${r.revision}`];
+        const key = evidenceKey(r);
+        const e = evidence[key];
         if (!e || e.unavailable) {
           return (
-            <li key={`${r.messageId}:${r.revision}`} className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
-              这条消息已被删除，无法再查看原文。
+            <li key={key} className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
+              {"eventId" in r ? "这条线下事件已被删除，无法再查看。" : "这条消息已被删除，无法再查看原文。"}
             </li>
           );
         }
         const edited = e.currentRevision !== null && e.currentRevision !== e.revision;
+        if (e.source === "event") {
+          return (
+            <li key={key} className="rounded-md border bg-background px-3 py-2 text-xs" data-testid="evidence-event">
+              <p className="font-medium">
+                <Badge className="mr-1.5">线下事件{e.eventKind ? ` · ${EVENT_KIND_LABEL[e.eventKind]}` : ""}</Badge>
+                <span className="text-muted-foreground">{e.occurredAt ? formatDate(e.occurredAt) : ""}</span>
+                <span className="mt-1 block whitespace-pre-wrap break-words text-sm font-normal">{e.content}</span>
+              </p>
+              <p className="mt-1 text-muted-foreground">这是你自己记录的事实；你对它的个人感受不会作为证据，也不会发送给 AI 服务商。</p>
+              {edited && <p className="mt-1 text-warn-foreground">这个事件在分析之后被你修改过，上面是分析当时看到的内容。</p>}
+            </li>
+          );
+        }
         return (
-          <li key={`${r.messageId}:${r.revision}`} className="rounded-md border bg-background px-3 py-2 text-xs">
+          <li key={key} className="rounded-md border bg-background px-3 py-2 text-xs">
             {e.before && (
               <p className="text-muted-foreground">
                 {SPEAKER_LABEL[e.before.speaker]}：{e.before.content}
@@ -61,7 +76,7 @@ function Facts({ title, items, evidence }: { title: string; items: { text: strin
           <li key={i}>
             <p>{f.text}</p>
             <details className="mt-1">
-              <summary className="cursor-pointer text-xs text-primary">查看证据（{f.refs.length} 条消息）</summary>
+              <summary className="cursor-pointer text-xs text-primary">查看证据（{f.refs.length} 条）</summary>
               <EvidenceList refs={f.refs} evidence={evidence} />
             </details>
           </li>
@@ -223,6 +238,9 @@ export function AnalysisReport({ report, evidence, freshness }: { report: Report
           <li>资料截止时间：{formatDateTime(report.snapshotAt)}（之后新增或修改的资料不在本报告内）</li>
           <li>
             共 {report.messageCount} 条消息：连续聊天 {kinds.CONTINUOUS} 批、精选片段 {kinds.CURATED} 批、不确定 {kinds.UNCERTAIN} 批
+          </li>
+          <li data-testid="report-event-scope">
+            线下事件 {report.eventCount} 个（只发送事实；你的个人感受不会发送，也不参与分析）
           </li>
           <li>
             规则版本：{report.rulesVersion}
