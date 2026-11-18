@@ -1,0 +1,7 @@
+{
+  "currency": "CNY",
+  "pricesVerified": false,
+  "notice": "单价尚未核实：真实服务商接入并核实价格前，成本只能显示“无法估算”。填写单价后须把 pricesVerified 改为 true。",
+  "default": { "inputPerMillionTokens": null, "outputPerMillionTokens": null },
+  "models": {}
+}

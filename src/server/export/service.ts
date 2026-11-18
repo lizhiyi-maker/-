@@ -45,10 +45,11 @@ export function createExport(db: Db, deps: { now?: () => Date } = {}) {
   async function build(userId: string) {
     const user = await db.user.findUnique({ where: { id: userId }, select: { createdAt: true } });
     if (!user) throw new NotFoundError("用户");
-    const [preference, quotaEntries, consents, people] = await Promise.all([
+    const [preference, quotaEntries, consents, feedback, people] = await Promise.all([
       db.preference.findUnique({ where: { userId } }),
       db.quotaEntry.findMany({ where: { userId }, orderBy: { createdAt: "asc" }, select: { kind: true, type: true, delta: true, amount: true, periodKey: true, reason: true, createdAt: true } }),
       db.consentRecord.findMany({ where: { userId }, orderBy: { acceptedAt: "asc" }, select: { version: true, providerId: true, acceptedAt: true } }),
+      db.feedback.findMany({ where: { userId }, orderBy: { createdAt: "asc" }, select: { category: true, message: true, snippet: true, status: true, createdAt: true } }),
       db.person.findMany({
         where: { userId, status: "ACTIVE" },
         orderBy: [{ createdAt: "asc" }, { id: "asc" }],
@@ -148,6 +149,8 @@ export function createExport(db: Db, deps: { now?: () => Date } = {}) {
         : null,
       consents,
       quotaLedger: quotaEntries,
+      /** 你提交过的反馈（含你主动附上的片段） */
+      feedback,
       people: exported,
     };
   }

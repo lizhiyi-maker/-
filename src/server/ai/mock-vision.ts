@@ -29,6 +29,8 @@ function readPngText(bytes: Uint8Array, keyword: string): string | null {
  */
 export function createMockVision(): VisionModel {
   return {
+    id: "mock-vision-v0",
+    simulated: true,
     async recognize({ bytes, contentType }: VisionInput): Promise<VisionResult> {
       if (contentType !== "image/png") throw new Error("模拟识别只支持内嵌转写的 PNG");
       const encoded = readPngText(bytes, TRANSCRIPT_CHUNK);

@@ -7,9 +7,12 @@ export default async function AdminLayout({ children }: { children: React.ReactN
     <div className="space-y-4">
       <div className="flex items-center gap-4">
         <h1 className="text-xl font-semibold">管理后台</h1>
-        <nav aria-label="后台导航" className="flex gap-3 text-sm">
+        <nav aria-label="后台导航" className="flex flex-wrap gap-3 text-sm">
           <Link href="/admin">邀请码</Link>
           <Link href="/admin/users">用户与额度</Link>
+          <Link href="/admin/tasks">任务状态</Link>
+          <Link href="/admin/costs">成本</Link>
+          <Link href="/admin/feedback">用户反馈</Link>
           <Link href="/admin/audit">审计记录</Link>
         </nav>
       </div>

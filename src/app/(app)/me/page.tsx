@@ -57,6 +57,11 @@ export default async function MePage() {
         <ChevronRight className="size-4 text-muted-foreground" aria-hidden />
       </Link>
 
+      <Link href="/me/feedback" className="flex items-center justify-between rounded-lg border bg-card p-4 text-sm" data-testid="feedback-link">
+        意见反馈
+        <ChevronRight className="size-4 text-muted-foreground" aria-hidden />
+      </Link>
+
       {user.role === "ADMIN" && (
         <Link href="/admin" className="flex items-center justify-between rounded-lg border bg-card p-4 text-sm">
           管理后台

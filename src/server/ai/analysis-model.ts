@@ -26,6 +26,17 @@ export interface ModelEvent {
   content: string;
 }
 
+/** 服务商返回的 token 用量（真实适配器在每次调用后上报；模拟模型不上报）。 */
+export interface ModelUsageReport {
+  inputTokens: number;
+  outputTokens: number;
+}
+
+/** 每次模型调用的上下文：适配器用它上报用量。可选——不上报就记为“用量未知”。 */
+export interface CallContext {
+  reportUsage(u: ModelUsageReport): void;
+}
+
 export type FactPolarity = "support" | "counter" | "neutral";
 export type FactSignal = "explicit_refusal" | "temporary_cancel" | "cancel_with_reschedule" | "injection_ignored";
 
@@ -68,7 +79,9 @@ export interface AnalysisModel {
   readonly id: string;
   /** 提示词版本，写入分析快照 */
   readonly promptVersion: string;
-  extractFacts(input: ExtractInput): Promise<{ facts: Fact[] }>;
+  /** 是否是模拟模型：模拟模型没有真实用量与成本 */
+  readonly simulated?: boolean;
+  extractFacts(input: ExtractInput, ctx?: CallContext): Promise<{ facts: Fact[] }>;
   /** 返回待校验的原始 JSON（不可信，必须经 validateModelOutput） */
-  interpret(input: InterpretInput): Promise<unknown>;
+  interpret(input: InterpretInput, ctx?: CallContext): Promise<unknown>;
 }

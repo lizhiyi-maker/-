@@ -205,6 +205,7 @@ export function createMockAnalysisModel(): AnalysisModel {
   return {
     id: MOCK_ANALYSIS_MODEL_ID,
     promptVersion: MOCK_PROMPT_VERSION,
+    simulated: true,
     async extractFacts(input: ExtractInput) {
       return { facts: [...extractFactsByRules(input.messages), ...extractEventFactsByRules(input.events)] };
     },

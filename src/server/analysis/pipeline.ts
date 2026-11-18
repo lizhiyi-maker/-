@@ -4,7 +4,7 @@ import { isEventRef, validateModelOutput, type AnalysisOutput, type EvidenceRef,
 import { DIMENSION_KEYS } from "@/domain/analysis/rules";
 import type { MessageType, Speaker, TimePrecision } from "@/domain/chat/types";
 import type { EventKind } from "@/domain/events";
-import type { AnalysisModel, Fact, InterpretInput, ModelEvent, ModelMessage } from "@/server/ai/analysis-model";
+import type { AnalysisModel, CallContext, Fact, InterpretInput, ModelEvent, ModelMessage, ModelUsageReport } from "@/server/ai/analysis-model";
 
 /** 分析快照里的一条消息：内容取自快照记录的修订，因此即使之后被编辑也能重建当时的输入。 */
 export interface SnapshotMessage {
@@ -46,13 +46,23 @@ export interface DimensionVerification {
   cappedBy?: "CURATED_OR_UNCERTAIN";
 }
 
+/** 一次模型调用的用量：由流水线计时并收集适配器上报的 token；不含任何内容。 */
+export interface PipelineUsage {
+  kind: "ANALYSIS_EXTRACT" | "ANALYSIS_INTERPRET";
+  durationMs: number;
+  success: boolean;
+  inputTokens: number | null;
+  outputTokens: number | null;
+}
+
 export type PipelineResult =
   | {
       ok: true;
       output: AnalysisOutput;
       meta: { segments: number; verification: Record<string, DimensionVerification>; warnings: string[] };
+      usage: PipelineUsage[];
     }
-  | { ok: false; code: "MODEL_FAILED" | "INVALID_FACTS" | "INVALID_OUTPUT"; errors: string[] };
+  | { ok: false; code: "MODEL_FAILED" | "INVALID_FACTS" | "INVALID_OUTPUT"; errors: string[]; usage: PipelineUsage[] };
 
 /** 单段上限：条数与字数先到者为准。 */
 export const SEGMENT_LIMITS = { maxMessages: 60, maxChars: 3500 };
@@ -98,6 +108,22 @@ const DEFAULT_RESPECT: Omit<ResolvedSuggestion, "refs"> = {
  * 明确拒绝必须来自对方的消息，拒绝成立时剔除一切推进类建议。
  */
 export async function runAnalysisPipeline(input: PipelineInput): Promise<PipelineResult> {
+  const usage: PipelineUsage[] = [];
+  /** 计时并收集用量地调用模型；调用失败也记一条（失败的调用同样占用时间与可能的费用）。 */
+  async function timed<T>(kind: PipelineUsage["kind"], fn: (ctx: CallContext) => Promise<T>): Promise<T> {
+    const started = Date.now();
+    let reported: ModelUsageReport | null = null;
+    const record = (success: boolean) => usage.push({ kind, durationMs: Date.now() - started, success, inputTokens: reported?.inputTokens ?? null, outputTokens: reported?.outputTokens ?? null });
+    try {
+      const result = await fn({ reportUsage: (u) => void (reported = u) });
+      record(true);
+      return result;
+    } catch (e) {
+      record(false);
+      throw e;
+    }
+  }
+  const fail = (code: Extract<PipelineResult, { ok: false }>["code"], errors: string[]): PipelineResult => ({ ok: false, code, errors, usage });
   const coded: (ModelMessage & { snapshot: SnapshotMessage })[] = input.messages.map((m, i) => ({
     code: `M${i + 1}`,
     speaker: m.speaker,
@@ -134,19 +160,19 @@ export async function runAnalysisPipeline(input: PipelineInput): Promise<Pipelin
   const facts: Fact[] = [];
   try {
     for (const [segmentIndex, segment] of segments.entries()) {
-      const raw = await input.model.extractFacts({ messages: segment.messages.map(forModel), events: segment.events.map(forModelEvent), segmentIndex, segmentCount: segments.length });
+      const raw = await timed("ANALYSIS_EXTRACT", (ctx) => input.model.extractFacts({ messages: segment.messages.map(forModel), events: segment.events.map(forModelEvent), segmentIndex, segmentCount: segments.length }, ctx));
       const parsed = factsSchema.safeParse(raw);
-      if (!parsed.success) return { ok: false, code: "INVALID_FACTS", errors: parsed.error.issues.slice(0, 5).map((i) => i.message) };
+      if (!parsed.success) return fail("INVALID_FACTS", parsed.error.issues.slice(0, 5).map((i) => i.message));
       const inSegment = new Set([...segment.messages.map((m) => m.code), ...segment.events.map((e) => e.code)]);
       for (const f of parsed.data.facts) {
-        if (f.dimension !== "none" && !DIMENSION_KEYS.includes(f.dimension)) return { ok: false, code: "INVALID_FACTS", errors: [`未知维度 ${f.dimension}`] };
+        if (f.dimension !== "none" && !DIMENSION_KEYS.includes(f.dimension)) return fail("INVALID_FACTS", [`未知维度 ${f.dimension}`]);
         const outside = f.refs.filter((r) => !inSegment.has(r));
-        if (outside.length > 0) return { ok: false, code: "INVALID_FACTS", errors: [`事实引用了本段之外的消息：${outside.join("、")}`] };
+        if (outside.length > 0) return fail("INVALID_FACTS", [`事实引用了本段之外的消息：${outside.join("、")}`]);
         facts.push(f);
       }
     }
   } catch {
-    return { ok: false, code: "MODEL_FAILED", errors: [] }; // 不带出异常内容（可能含密钥或聊天文字）
+    return fail("MODEL_FAILED", []); // 不带出异常内容（可能含密钥或聊天文字）
   }
 
   // 2. 按维度解释
@@ -155,19 +181,24 @@ export async function runAnalysisPipeline(input: PipelineInput): Promise<Pipelin
   for (const kind of kindByBatch.values()) batchKinds[kind]++;
   let raw: unknown;
   try {
-    raw = await input.model.interpret({
-      facts,
-      scope: { messageCount: input.messages.length, eventCount: events.length, batchKinds },
-      preferences: input.preferences,
-      userContext: input.userContext,
-    });
+    raw = await timed("ANALYSIS_INTERPRET", (ctx) =>
+      input.model.interpret(
+        {
+          facts,
+          scope: { messageCount: input.messages.length, eventCount: events.length, batchKinds },
+          preferences: input.preferences,
+          userContext: input.userContext,
+        },
+        ctx,
+      ),
+    );
   } catch {
-    return { ok: false, code: "MODEL_FAILED", errors: [] };
+    return fail("MODEL_FAILED", []);
   }
 
   // 3. 结构与引用校验
   const validated = validateModelOutput(raw, refMap);
-  if (!validated.ok) return { ok: false, code: "INVALID_OUTPUT", errors: validated.errors };
+  if (!validated.ok) return fail("INVALID_OUTPUT", validated.errors);
   const output = validated.output;
 
   // 4. 程序核验
@@ -218,5 +249,5 @@ export async function runAnalysisPipeline(input: PipelineInput): Promise<Pipelin
     if (output.suggestions.length === 0) output.suggestions = [{ ...DEFAULT_RESPECT, refs: output.explicitRefusal.refs.slice(0, 3) }];
   }
 
-  return { ok: true, output, meta: { segments: segments.length, verification, warnings } };
+  return { ok: true, output, meta: { segments: segments.length, verification, warnings }, usage };
 }

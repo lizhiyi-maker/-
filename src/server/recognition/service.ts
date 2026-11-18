@@ -6,6 +6,8 @@ import { quotaConfig, type QuotaConfig } from "@/server/quota/config";
 import { QuotaError, type Quota } from "@/server/quota/ledger";
 import type { FileStorage } from "@/server/storage/types";
 import type { VisionModel } from "@/server/ai/vision";
+import type { ModelUsageReport } from "@/server/ai/analysis-model";
+import type { Usage } from "@/server/usage/service";
 import { sniffImageType } from "@/domain/chat/image-type";
 import { findOverlaps, type KeyMessage } from "@/domain/chat/overlap";
 import type { ParsedMessage } from "@/domain/chat/types";
@@ -30,6 +32,8 @@ export interface RecognitionDeps {
   /** 首次向 AI 服务商发送内容前必须已同意 */
   consent: Pick<Consent, "assertAccepted">;
   vision: VisionModel;
+  /** 记录每次识别调用的用量与估算成本（可选；不含内容） */
+  usage?: Pick<Usage, "record">;
   queue: JobQueue;
   now?: () => Date;
   config?: QuotaConfig;
@@ -302,13 +306,23 @@ export function createRecognition(db: Db, deps: RecognitionDeps) {
     const shot = await db.screenshot.findUniqueOrThrow({ where: { id: job.screenshotId } });
 
     let outcome: Outcome;
+    let reported: ModelUsageReport | null = null;
+    let called = false;
+    const started = Date.now();
     try {
       const bytes = await storage.get(shot.storageKey);
       if (!bytes) throw new Error("原图不存在");
-      outcome = { ok: true, messages: (await vision.recognize({ bytes, contentType: shot.contentType })).messages };
+      called = true;
+      outcome = { ok: true, messages: (await vision.recognize({ bytes, contentType: shot.contentType }, { reportUsage: (u) => void (reported = u) })).messages };
     } catch {
       // 不记录异常内容（可能含聊天文字），只记录失败类别
       outcome = { ok: false, code: "RECOGNITION_FAILED" };
+    }
+    // 只有真正调用了识别模型才记用量（原图读取失败没有发生服务商调用）；写入失败不影响识别
+    if (called) {
+      await deps.usage?.record([
+        { userId: shot.userId, kind: "RECOGNITION", taskId: shot.id, modelId: vision.id ?? "unknown", simulated: vision.simulated ?? false, inputTokens: (reported as ModelUsageReport | null)?.inputTokens ?? null, outputTokens: (reported as ModelUsageReport | null)?.outputTokens ?? null, durationMs: Date.now() - started, success: outcome.ok },
+      ]);
     }
     await finishScreenshot(job, outcome, "RUNNING");
   }

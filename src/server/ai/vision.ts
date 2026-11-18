@@ -1,5 +1,7 @@
 import type { ParsedMessage } from "@/domain/chat/types";
 
+import type { CallContext } from "./analysis-model";
+
 export interface VisionInput {
   bytes: Uint8Array;
   contentType: string;
@@ -19,5 +21,9 @@ export interface VisionResult {
  * 抛出异常表示系统失败（不扣用户额度）。
  */
 export interface VisionModel {
-  recognize(input: VisionInput): Promise<VisionResult>;
+  /** 模型标识，写入用量记录 */
+  readonly id?: string;
+  /** 是否是模拟模型：模拟模型没有真实用量与成本 */
+  readonly simulated?: boolean;
+  recognize(input: VisionInput, ctx?: CallContext): Promise<VisionResult>;
 }

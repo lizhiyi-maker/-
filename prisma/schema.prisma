@@ -44,6 +44,8 @@ model User {
   consents      ConsentRecord[]
   analyses      Analysis[]
   events        OfflineEvent[]
+  feedbacks     Feedback[]
+  usages        ModelUsage[]
 }
 
 model Session {
@@ -539,6 +541,68 @@ model QuotaEntry {
 
   @@unique([userId, kind, taskKey, type])
   @@index([userId, kind, periodKey])
+}
+
+// ───────── 运营：模型用量与用户反馈 ─────────
+
+enum UsageKind {
+  ANALYSIS_EXTRACT
+  ANALYSIS_INTERPRET
+  RECOGNITION
+}
+
+/// 一次 AI 服务商调用的用量与估算成本。**不存任何聊天内容。** 账户删除后 userId 置空，只保留不含身份的成本记录。
+model ModelUsage {
+  id            String    @id @default(cuid())
+  userId        String?
+  kind          UsageKind
+  /// 所属任务（分析 ID 或截图 ID），只用于按任务汇总
+  taskId        String
+  modelId       String
+  /// 是否是模拟模型（模拟模型没有真实用量与成本）
+  simulated     Boolean
+  inputTokens   Int?
+  outputTokens  Int?
+  durationMs    Int
+  success       Boolean
+  /// 估算成本，单位：百万分之一元；null 表示无法估算（缺少用量或单价）
+  costMicroYuan Int?
+  createdAt     DateTime  @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([taskId])
+}
+
+enum FeedbackCategory {
+  BUG
+  SUGGESTION
+  INACCURATE
+  OTHER
+}
+
+enum FeedbackStatus {
+  NEW
+  HANDLED
+}
+
+/// 用户反馈。`snippet` 只有用户主动粘贴才有，系统不会自动附带聊天或对象信息。随账户删除一并删除。
+model Feedback {
+  id        String           @id @default(cuid())
+  userId    String
+  category  FeedbackCategory
+  message   String
+  snippet   String?
+  status    FeedbackStatus   @default(NEW)
+  createdAt DateTime         @default(now())
+  handledAt DateTime?
+  handledBy String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+  @@index([userId])
 }
 
 // ───────── 审计 ─────────

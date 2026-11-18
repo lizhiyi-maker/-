@@ -14,6 +14,7 @@ import { createCompare } from "@/server/compare/service";
 import { createConsent } from "@/server/consent/service";
 import { createEvents } from "@/server/events/service";
 import { createExport } from "@/server/export/service";
+import { createFeedback } from "@/server/feedback/service";
 import { providerInfo } from "@/domain/consent";
 import { createImports } from "@/server/imports/service";
 import { createPeople } from "@/server/people/service";
@@ -21,6 +22,7 @@ import { createPreferences } from "@/server/preferences/service";
 import { createPgBossQueue } from "@/server/queue";
 import { createQuota } from "@/server/quota/ledger";
 import { createRecognition } from "@/server/recognition/service";
+import { createUsage } from "@/server/usage/service";
 import { mockSms } from "@/server/sms/mock";
 import type { SmsSender } from "@/server/sms/types";
 import { createLocalStorage } from "@/server/storage/local";
@@ -64,10 +66,12 @@ function build() {
   const provider = providerInfo(env.AI_PROVIDER);
   const consent = createConsent(db, { providerId: provider.id });
   const preferences = createPreferences(db);
+  const usage = createUsage(db);
   const analysis = createAnalysis(db, {
     quota,
     consent,
     preferences,
+    usage,
     model: buildAnalysisModel(env),
     queue: { enqueue: (job) => queue.enqueueAnalysis(job) },
   });
@@ -84,12 +88,14 @@ function build() {
     account: createAccount(db, { storage }),
     people: createPeople(db, { quota }),
     imports: createImports(db, { storage, quota }),
-    recognition: createRecognition(db, { storage, quota, consent, vision: buildVision(env), queue }),
+    recognition: createRecognition(db, { storage, quota, consent, vision: buildVision(env), usage, queue }),
+    feedback: createFeedback(db),
+    usage,
     analysis,
     compare: createCompare(db, { analysis, preferences }),
     preferences,
     quota,
-    admin: createAdmin(db, { keys }),
+    admin: createAdmin(db, { keys, usage }),
   };
 }
 

@@ -118,7 +118,10 @@ describe("程序核验，不采信模型自称", () => {
   it("模型抛出异常：作为系统失败返回，不泄露异常内容", async () => {
     const model: AnalysisModel = { ...createMockAnalysisModel(), async extractFacts() { throw new Error("密钥 sk-secret 无效，聊天内容：你好"); } };
     const r = await run([msg("OTHER", "你好吗？")], model);
-    expect(r).toEqual({ ok: false, code: "MODEL_FAILED", errors: [] });
+    expect(r).toMatchObject({ ok: false, code: "MODEL_FAILED", errors: [] });
+    // 失败的调用也记用量（类型、耗时、失败），但不带出异常内容
+    expect(r.usage).toEqual([expect.objectContaining({ kind: "ANALYSIS_EXTRACT", success: false, inputTokens: null, outputTokens: null })]);
+    expect(JSON.stringify(r)).not.toMatch(/sk-secret|你好/);
   });
 });
 

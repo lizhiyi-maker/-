@@ -6,6 +6,7 @@ import { lockLivePerson, type Tx } from "@/server/people/service";
 import type { Preferences } from "@/server/preferences/service";
 import { QuotaError, type Quota } from "@/server/quota/ledger";
 import type { Consent } from "@/server/consent/service";
+import type { Usage } from "@/server/usage/service";
 import type { AnalysisModel } from "@/server/ai/analysis-model";
 import { computeFreshness, type Freshness } from "@/domain/analysis/freshness";
 import { evidenceKey, isEventRef, type AnalysisOutput, type EvidenceRef } from "@/domain/analysis/output";
@@ -28,6 +29,8 @@ export interface AnalysisDeps {
   consent: Pick<Consent, "assertAccepted">;
   preferences: Pick<Preferences, "get">;
   model: AnalysisModel;
+  /** 记录每次模型调用的用量与估算成本（可选；不含内容） */
+  usage?: Pick<Usage, "record">;
   queue: { enqueue(job: AnalysisJob): Promise<void> };
   now?: () => Date;
   /** 当前规则版本；默认取评分配置里的版本 */
@@ -344,6 +347,10 @@ export function createAnalysis(db: Db, deps: AnalysisDeps) {
       preferences: { expectation: prefs.expectation, contactFrequency: prefs.contactFrequency, pace: prefs.pace },
       userContext: { feelingsNote: person.feelingsNote, currentFeeling: person.feelings[0]?.value ?? null },
     });
+    // 失败与成功的调用都记用量（调用确实发生了）；写入失败不影响分析
+    await deps.usage?.record(
+      result.usage.map((u) => ({ userId: a.userId, kind: u.kind, taskId: a.id, modelId: model.id, simulated: model.simulated ?? false, inputTokens: u.inputTokens, outputTokens: u.outputTokens, durationMs: u.durationMs, success: u.success })),
+    );
     if (!result.ok) {
       await finish(a.id, { status: "FAILED", errorCode: result.code }, "RUNNING");
       return;

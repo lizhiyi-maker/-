@@ -4,6 +4,7 @@ import type { QuotaKind } from "@/generated/prisma/enums";
 import { NotFoundError, ValidationError } from "@/server/errors";
 import { createQuota } from "@/server/quota/ledger";
 import { decryptPhone, maskPhone } from "@/server/auth/phone";
+import type { Usage } from "@/server/usage/service";
 
 export class ForbiddenError extends Error {
   constructor() {
@@ -25,7 +26,7 @@ type InviteStatus = "ACTIVE" | "REVOKED" | "EXPIRED" | "EXHAUSTED";
  * 变更与审计记录在同一事务内提交，失败的操作不留审计。
  * 审计与列表都不包含聊天内容；用户列表只显示脱敏手机号。
  */
-export function createAdmin(db: Db, deps: { keys: { encKey: string }; now?: () => Date }) {
+export function createAdmin(db: Db, deps: { keys: { encKey: string }; now?: () => Date; usage?: Pick<Usage, "summary"> }) {
   const now = deps.now ?? (() => new Date());
   const quota = createQuota(db, { now });
 
@@ -119,7 +120,82 @@ export function createAdmin(db: Db, deps: { keys: { encKey: string }; now?: () =
     return db.auditLog.findMany({ orderBy: { createdAt: "desc" }, take: 200 });
   }
 
-  return { createInvite, revokeInvite, setUserStatus, grantQuota, listInvites, listUsers, listAudit };
+  // ───────── 后台运营：任务状态、成本、反馈（只读，不含聊天内容） ─────────
+
+  /** 排队/运行超过这个时间没有结果视为卡住（与 worker 的清扫任务一致，docs/business/state-machines.md）。 */
+  const STUCK_AFTER_MS = 15 * 60_000;
+  const phoneMaskedOf = async (userIds: string[]) => {
+    const users = await db.user.findMany({ where: { id: { in: [...new Set(userIds)] } }, select: { id: true, phoneEnc: true } });
+    return new Map(users.map((u) => [u.id, maskPhone(decryptPhone(u.phoneEnc, deps.keys.encKey))]));
+  };
+
+  /**
+   * 任务状态（分析 + 截图识别）：近 24 小时各状态数量、失败错误码分布、卡住的任务、最近 50 条任务。
+   * 只含状态、时间、错误码与脱敏手机号，不含聊天、昵称、文件路径；管理员只读，没有重试/取消/退款操作。
+   */
+  async function taskStatus(actorId: string) {
+    await assertAdmin(actorId);
+    const t = now().getTime();
+    const since = new Date(t - 86_400_000);
+    const stuckBefore = new Date(t - STUCK_AFTER_MS);
+    const [aStatus, sStatus, aErrors, sErrors, aStuck, sStuck, aRecent, sRecent] = await Promise.all([
+      db.analysis.groupBy({ by: ["status"], where: { queuedAt: { gte: since } }, _count: { _all: true } }),
+      db.screenshot.groupBy({ by: ["status"], where: { queuedAt: { gte: since } }, _count: { _all: true } }),
+      db.analysis.groupBy({ by: ["errorCode"], where: { queuedAt: { gte: since }, status: { in: ["FAILED", "INVALIDATED"] } }, _count: { _all: true } }),
+      db.screenshot.groupBy({ by: ["errorCode"], where: { queuedAt: { gte: since }, status: "FAILED" }, _count: { _all: true } }),
+      db.analysis.findMany({ where: { status: { in: ["QUEUED", "RUNNING"] }, queuedAt: { lt: stuckBefore } }, select: { id: true, userId: true, status: true, queuedAt: true }, take: 50 }),
+      db.screenshot.findMany({ where: { status: { in: ["QUEUED", "RUNNING"] }, queuedAt: { lt: stuckBefore } }, select: { id: true, userId: true, status: true, queuedAt: true }, take: 50 }),
+      db.analysis.findMany({ orderBy: { queuedAt: "desc" }, take: 50, select: { id: true, userId: true, status: true, errorCode: true, queuedAt: true, startedAt: true, finishedAt: true } }),
+      db.screenshot.findMany({ where: { queuedAt: { not: null } }, orderBy: { queuedAt: "desc" }, take: 50, select: { id: true, userId: true, status: true, errorCode: true, queuedAt: true, finishedAt: true, attempts: true } }),
+    ]);
+
+    const toCounts = (rows: { status: string; _count: { _all: number } }[]) => Object.fromEntries(rows.map((r) => [r.status, r._count._all])) as Record<string, number>;
+    const toErrors = (rows: { errorCode: string | null; _count: { _all: number } }[]) => Object.fromEntries(rows.map((r) => [r.errorCode ?? "UNKNOWN", r._count._all])) as Record<string, number>;
+    const recentAll = [
+      ...aRecent.map((a) => ({ kind: "ANALYSIS" as const, id: a.id, userId: a.userId, status: a.status as string, errorCode: a.errorCode, queuedAt: a.queuedAt, durationMs: a.finishedAt ? a.finishedAt.getTime() - (a.startedAt ?? a.queuedAt).getTime() : null, attempts: null as number | null })),
+      ...sRecent.map((s) => ({ kind: "RECOGNITION" as const, id: s.id, userId: s.userId, status: s.status as string, errorCode: s.errorCode, queuedAt: s.queuedAt!, durationMs: s.finishedAt ? s.finishedAt.getTime() - s.queuedAt!.getTime() : null, attempts: s.attempts as number | null })),
+    ]
+      .sort((a, b) => b.queuedAt.getTime() - a.queuedAt.getTime())
+      .slice(0, 50);
+    const stuckAll = [...aStuck.map((x) => ({ kind: "ANALYSIS" as const, ...x })), ...sStuck.map((x) => ({ kind: "RECOGNITION" as const, ...x }))];
+    const masked = await phoneMaskedOf([...recentAll.map((r) => r.userId), ...stuckAll.map((r) => r.userId)]);
+    const stripUser = <T extends { userId: string }>({ userId, ...rest }: T) => ({ ...rest, userPhoneMasked: masked.get(userId) ?? "—" });
+
+    return {
+      windowHours: 24,
+      stuckAfterMinutes: STUCK_AFTER_MS / 60_000,
+      analysis: { counts: toCounts(aStatus), errorCodes: toErrors(aErrors) },
+      recognition: { counts: toCounts(sStatus), errorCodes: toErrors(sErrors) },
+      stuck: stuckAll.map((s) => ({ ...stripUser(s), ageMinutes: Math.floor((t - s.queuedAt!.getTime()) / 60_000) })),
+      recent: recentAll.map(stripUser),
+    };
+  }
+
+  /** 成本汇总：最近 days 天的模型用量与估算成本。只含用量与成本，不含内容。 */
+  async function costSummary(actorId: string, days = 30) {
+    await assertAdmin(actorId);
+    if (!deps.usage) throw new ValidationError("用量记录未启用");
+    return deps.usage.summary(days);
+  }
+
+  /** 用户反馈列表（未处理的在前，新的在前）：手机号脱敏；内容只有用户自己写下与主动粘贴的片段，管理员不能借此浏览聊天。 */
+  async function listFeedback(actorId: string) {
+    await assertAdmin(actorId);
+    const rows = await db.feedback.findMany({ orderBy: [{ status: "asc" }, { createdAt: "desc" }], take: 200 });
+    const masked = await phoneMaskedOf(rows.map((r) => r.userId));
+    return rows.map((r) => ({ id: r.id, userPhoneMasked: masked.get(r.userId) ?? "—", category: r.category, message: r.message, snippet: r.snippet, status: r.status, createdAt: r.createdAt, handledAt: r.handledAt }));
+  }
+
+  async function handleFeedback(actorId: string, feedbackId: string) {
+    await assertAdmin(actorId);
+    await db.$transaction(async (tx) => {
+      const r = await tx.feedback.updateMany({ where: { id: feedbackId, status: "NEW" }, data: { status: "HANDLED", handledAt: now(), handledBy: actorId } });
+      if (r.count === 0) throw new NotFoundError("反馈");
+      await audit(tx, actorId, "feedback.handle", "Feedback", feedbackId); // 审计不含反馈内容
+    });
+  }
+
+  return { createInvite, revokeInvite, setUserStatus, grantQuota, listInvites, listUsers, listAudit, taskStatus, costSummary, listFeedback, handleFeedback };
 }
 
 export type Admin = ReturnType<typeof createAdmin>;
