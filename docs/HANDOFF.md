@@ -1,6 +1,6 @@
 # 交接记录（新对话从这里开始）
 
-> 更新于 2026-11-18，M5c 完成待用户提交时。新对话先读本文件，再读 `README.md`、`GLOSSARY.md`、`docs/verification-matrix.md`。
+> 更新于 2026-11-18，M6a 完成待用户提交时。新对话先读本文件，再读 `README.md`、`GLOSSARY.md`、`docs/verification-matrix.md`。
 
 ## 1. 进度
 
@@ -16,9 +16,13 @@
 | M4 | 纯函数评分、对比/排名/待了解/趋势、报告适配分与趋势卡片 | ✅ 9f69c03 |
 | M5a | 数据导出 + 账户删除全流程（隐私功能） | ✅ e3024d7 |
 | M5b | 后台任务状态、成本、用户反馈 | ✅ 5db3266 |
-| M5c | Dockerfile、部署与备案文档、手机端/微信验收清单、最终 AI 评测报告、剩余限制清单（规则保持 experimental） | ✅ 本次提交 |
+| M5c | Dockerfile、部署与备案文档、手机端/微信验收清单、最终 AI 评测报告、剩余限制清单（规则保持 experimental） | ✅ 23ed158 |
+| M6a | 真实适配器第一块：阿里云短信 + OSS（官方 SDK，假服务测试，**未对真实服务联调**） | ✅ 本次提交 |
+| **M6b** | **百炼视觉 + 文本适配器（fetch，模型名走必填环境变量）；隐私政策事实清单（用户/法务起草）** | ⏳ 下一步 |
 
-**MVP 的开发范围到此全部完成。** 剩下的不是写功能，而是：真实服务适配器（AI/短信/OSS）、真实模型评测、合规核实与备案、真机验收——见 [docs/limitations.md](./limitations.md) 的 A 组（上线阻断）。下一步由用户决定先做哪一块。
+**MVP 的功能范围在 M5c 完成；M6 起接入真实服务。** 剩下的不是写功能，而是：真实服务适配器（AI/短信/OSS）、真实模型评测、合规核实与备案、真机验收——见 [docs/limitations.md](./limitations.md) 的 A 组（上线阻断）。下一步由用户决定先做哪一块。
+
+M6a 取舍（用户确认）：拆两块（M6a 短信+OSS、M6b 百炼）；短信/OSS 用官方 SDK（`@alicloud/dysmsapi20170525`、`ali-oss`，惰性加载），百炼用 fetch；百炼模型名走必填环境变量不设默认；测试接缝 = 短信适配器单测、存储契约测试（本地+OSS）、百炼适配器单测（注入 fetch，M6b）、环境与装配单测。M6a 实现要点：`src/server/sms/aliyun.ts`（`SmsApi` 薄接口 + `SmsSendError` 只带错误码）、`src/server/storage/{shared,oss}.ts`（key 规则与令牌签名抽成共用，本地与 OSS 共用；OSS 上传带 `x-oss-server-side-encryption: AES256`；`OssClient` 薄接口）、`src/server/providers.ts`（短信与存储装配，从 container 抽出）、新增可选环境变量 `SMS_TEMPLATE_PARAM_NAME`（默认 code）、`next.config.ts` 的 `serverExternalPackages` 加入两个 SDK。测试：`tests/support/storage-contract.ts`（契约，本地与 OSS 共跑）；另有“真实 SDK 对本地假服务”的接线测试各一，只证明请求被正确构造与签名头存在，**不证明阿里云接受**。**M6a 没做的**：百炼；真实联调；SDK 查询串里带手机号与验证码是官方 RPC 风格，HTTPS 下可接受，但代理/日志层要注意不记完整 URL。
 
 M5c 取舍（用户确认）：评分规则保持 `experimental`；Dockerfile 一个镜像两个启动命令；代码只加“配置漂移守卫”单测（`ENV_KEYS` 导出自 `src/lib/env.ts`），**没有**加健康检查端点测试与评测覆盖对照检查。M5c 的新发现：生产模式 + 真实提供方变量下应用能启动、`/api/health` 200，但页面 500（适配器未实现）——健康检查不代表可用；移除了 `next.config.ts` 的 `output: "standalone"`（镜像用 `next start`，该配置会让 `next start` 报警告）。交付物：`Dockerfile`、`.dockerignore`、`docs/deploy/README.md`、`docs/deploy/icp-and-compliance.md`、`docs/acceptance/mobile-wechat-checklist.md`、`docs/evals/final-ai-eval-report.md`、`docs/limitations.md`。**Dockerfile 没有在真实 Docker 构建过；备案/合规内容全部“待核实”，不是法律意见。**
 

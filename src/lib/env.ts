@@ -30,6 +30,8 @@ const baseSchema = z.object({
   OSS_REGION: z.string().optional(),
   SMS_SIGN_NAME: z.string().optional(),
   SMS_TEMPLATE_CODE: z.string().optional(),
+  // 审核通过的短信模板里验证码变量的名字（模板是 ${code} 就填 code）
+  SMS_TEMPLATE_PARAM_NAME: z.string().min(1).default("code"),
 });
 
 /** 代码认识的全部环境变量名（供配置漂移守卫测试对照 .env.example 与部署文档）。 */

@@ -1,13 +1,13 @@
 # 部署指南
 
-> **当前状态（M5c，2026-11-18）：还不能上线。** 真实的 AI（百炼）、短信（阿里云）、对象存储（OSS）适配器**都没有写**；生产模式要求它们，所以今天的代码在生产模式下不能提供服务（见 §1）。本文把已验证的部分、没验证的部分和上线前必须做的事分开写。
+> **当前状态（M6a，2026-11-18）：还不能上线。** 阿里云短信与 OSS 适配器已写（用假服务测试，**没有对真实服务联调**）；**百炼 AI 适配器还没写**，生产模式要求真实 AI，所以今天的代码在生产模式下仍不能提供服务（见 §1）。本文把已验证的部分、没验证的部分和上线前必须做的事分开写。
 > 图例同 [验证矩阵](../verification-matrix.md)：✅ 本机真实运行验证 ｜ 🧪 仅模拟 ｜ ⏳ 需要真实环境/真机。
 > 合规与备案见 [icp-and-compliance.md](./icp-and-compliance.md)；剩余限制见 [../limitations.md](../limitations.md)。
 
 ## 1. 先看这三个事实
 
 1. **生产模式的启动保护（✅）**：`NODE_ENV=production` 且 `APP_MODE=demo` 时 Web 与 worker 拒绝启动；`APP_MODE=production` 时模拟 AI/短信/存储、开发登录、示例或不足 32 字符的密钥都会被拒绝（`src/lib/env.ts`，单元测试 12 项）。
-2. **真实适配器缺失（⏳）**：`AI_PROVIDER=bailian`、`STORAGE_PROVIDER=oss`、`SMS_PROVIDER=aliyun` 能通过环境校验，但 `src/server/container.ts` 在第一次使用时抛“尚未实现”。2026-11-18 实测：按生产模式、全部真实提供方、完整环境变量启动，`GET /api/health` 返回 200，而 `/login` 返回 500（“存储提供方 oss 尚未实现”）。**所以健康检查通过不代表应用可用**；这是已知限制，没有改成启动即失败（那是行为变更，需要你确认）。
+2. **真实适配器的状态（⏳）**：短信（`src/server/sms/aliyun.ts`）与 OSS（`src/server/storage/oss.ts`）适配器已写，单测与“真实官方 SDK 对本地假服务”的接线测试通过，**但没有对真实阿里云验证过**；百炼适配器（`AI_PROVIDER=bailian`）还没写，`src/server/container.ts` 在第一次使用 AI 时抛“尚未实现”。M5c 实测（当时短信/OSS 也未写）：按生产模式、全部真实提供方、完整环境变量启动，`GET /api/health` 返回 200，而页面返回 500。**所以健康检查通过不代表应用可用**；这是已知限制，没有改成启动即失败（那是行为变更，需要你确认）。
 3. **演示模式不能放进生产环境**：容器里 `NODE_ENV=production`，此时 `APP_MODE=demo` 会拒绝启动。需要在线演示时应单独部署一套 `NODE_ENV=development` 的环境，并明确标注，不能连真实用户数据。
 
 ## 2. 镜像（⏳ 未在 Docker 里构建过）
@@ -58,6 +58,7 @@ docker run --rm -e NODE_ENV=production -e APP_MODE=demo -e DATABASE_URL=postgres
 | `ALIYUN_ACCESS_KEY_ID`、`ALIYUN_ACCESS_KEY_SECRET` | OSS 或短信时必填 | 建议 RAM 子账号、最小权限（见 §6） |
 | `OSS_BUCKET`、`OSS_REGION` | OSS 时必填 | 私有桶 |
 | `SMS_SIGN_NAME`、`SMS_TEMPLATE_CODE` | 短信时必填 | 签名与模板需先通过运营商审核 |
+| `SMS_TEMPLATE_PARAM_NAME` | 可选，默认 `code` | 审核通过的模板里验证码变量的名字（模板是 `${code}` 就填 code）；与模板不一致时短信会发不出去 |
 
 密钥只走环境变量/平台的密钥管理，不写进镜像、不进仓库（`.dockerignore` 已排除 `.env*`）。校验失败的报错不含取值。
 

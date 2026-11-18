@@ -55,7 +55,9 @@
 | pg-boss worker 链路（入队→独立 worker 处理，表在 pgboss schema） | M0 | ✅ | 集成测试，embedded-postgres（Windows） |
 | 应用外壳：手机底部导航/电脑侧边导航/演示横幅 | M0 | 🧪 | Playwright 设备模拟（iPhone 14 WebKit、Pixel 7、桌面 Chrome）；真机与微信浏览器 ⏳ |
 | Dockerfile（一个镜像、web/worker 两个启动命令） | M5c | ⏳ | **未在真实 Docker 里构建**（本机无 Docker）。已在本机验证镜像背后的步骤：无 `.env`/无 `DATABASE_URL` 时 `next build` 通过；生产模式 `next start` 启动、`/api/health` 200；worker、`prisma migrate deploy`、`admin:create` 在开发库实测过。⏳：干净环境 `npm ci`、基础镜像上的 Prisma 引擎、非 root 运行、镜像体积。移除了 `output: "standalone"`（镜像用 `next start`） |
-| 生产模式配置的实际可用性 | M5c | — | **今天不可用**：真实 AI/短信/OSS 适配器未写。实测生产模式 + 全部真实提供方的环境变量下，`/api/health` 200 但 `/login` 500（“存储提供方 oss 尚未实现”）——健康检查通过不代表可用，见 [deploy §1](./deploy/README.md) |
+| 生产模式配置的实际可用性 | M5c → M6a | — | **今天仍不可用**：短信与 OSS 适配器已写（M6a），**百炼 AI 适配器未写**（M6b），`AI_PROVIDER=bailian` 在首次使用时仍抛“尚未实现”。M5c 实测：生产模式 + 全部真实提供方变量下 `/api/health` 200 但页面 500——健康检查通过不代表可用，见 [deploy §1](./deploy/README.md) |
+| 阿里云短信适配器 | M6a | 🧪 | 单测 8 项：参数映射（手机号/签名/模板/验证码变量，变量名可配 `SMS_TEMPLATE_PARAM_NAME`）、服务商非 OK/无状态码/异常/超时都失败（登录流程会撤销该验证码）、错误只带错误码，不含手机号、验证码、服务商消息或原始异常；另用**真实官方 SDK 对本地假服务**验证请求带 ACS3 签名头与全部参数、密钥不出现在请求里。变异检查 2 项全红。⏳：**没有对真实阿里云验证**——签名是否被接受、签名/模板审核、到达率、限流码的实际取值。注意：SDK 把手机号与验证码放在请求 URL 的查询串里（HTTPS 传输） |
+| 阿里云 OSS 存储适配器 | M6a | 🧪 | **存储契约测试**：同一套 7 个用例跑本地实现与 OSS 适配器（存取删、二进制原样、key 防穿越、令牌过期/篡改/换密钥、列表、删除后不在列表）；OSS 特有 6 项：上传带 AES256 服务端加密头与内容类型、非法 key 不发请求、只有 NoSuchKey 当作不存在、错误不带原始消息、列表跨页与空桶与缺游标不死循环；另用**真实 ali-oss SDK 对本地假服务**验证签名头、加密头、删除、404 读成不存在。变异检查 6 项全红。⏳：**没有对真实桶验证**——权限、桶是否私有、静态加密/版本控制/生命周期、跨地域延迟、签名被接受。下载仍经应用路由校验归属（桶不公开） |
 | 配置漂移守卫（环境变量：代码 ↔ `.env.example` ↔ 部署文档） | M5c | ✅ | 单元测试 4 项：代码认识的每个变量都在 `.env.example` 与部署文档里；`.env.example` 没有代码不认识的变量。只查变量名，不查文档说得对不对 |
 | 部署指南、备案与合规核实清单 | M5c | ⏳ | [docs/deploy/](./deploy/README.md)：文档已写；**备案/合规规则无法在本机核实，全部标“待核实”**，不是法律意见；隐私政策、用户协议未写 |
 | 手机端与微信内置浏览器验收 | M5c | ⏳ | [验收清单](./acceptance/mobile-wechat-checklist.md) 已写（6 组 30 项、四种环境），**真机由你执行**；自动化只有 Playwright 设备模拟（iPhone 14 WebKit / Pixel 7 / 桌面 Chrome） |

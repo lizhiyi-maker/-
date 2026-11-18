@@ -7,9 +7,9 @@
 
 | # | 限制 | 出处/细节 |
 |---|---|---|
-| A1 | **真实 AI 适配器未写**：百炼视觉与文本都是“尚未实现”；今天所有识别与分析都是规则型模拟。生产模式要求真实提供方，因此生产模式下 Web 启动后任何用到服务的页面返回 500（实测 `/login` 500，而 `/api/health` 仍 200） | [deploy §1](./deploy/README.md) |
-| A2 | **真实短信适配器未写**：没有短信就没有登录 | container.ts |
-| A3 | **真实 OSS 适配器未写**：截图只能存本地目录，无法多副本 | container.ts |
+| A1 | **真实 AI 适配器未写**：百炼视觉与文本都是“尚未实现”；今天所有识别与分析都是规则型模拟。生产模式要求真实 AI，因此生产模式下用到 AI 的功能会失败（M5c 实测当时 `/login` 500 而 `/api/health` 仍 200；M6a 之后登录/存储已不再因此失败，识别与分析仍会） | [deploy §1](./deploy/README.md) |
+| A2 | ~~真实短信适配器未写~~ **M6a 已写，未对真实服务联调 ⏳**：签名/模板审核、到达率、限流码取值都没验证；SDK 把手机号与验证码放在请求 URL 查询串（HTTPS 传输） | `src/server/sms/aliyun.ts` |
+| A3 | ~~真实 OSS 适配器未写~~ **M6a 已写，未对真实桶联调 ⏳**：桶权限/私有性、静态加密、版本控制、生命周期、上传请求了 SSE-OSS（AES256）但桶侧是否接受未验证 | `src/server/storage/oss.ts` |
 | A4 | **没有隐私政策与用户协议**；没有上传他人聊天的权利提示；没有成年人确认 | [compliance C7/C8/C12](./deploy/icp-and-compliance.md) |
 | A5 | **ICP 备案、短信签名/模板审核、生成式 AI 相关备案、个保法评估均未核实/未办** | [compliance](./deploy/icp-and-compliance.md) |
 | A6 | **真机与微信内置浏览器未验收**（清单已写） | [acceptance](./acceptance/mobile-wechat-checklist.md) |
